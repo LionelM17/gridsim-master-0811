@@ -81,7 +81,11 @@ class DDPG_Agent(BaseAgent):
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau)
 
-    def act(self, obs, reward, done = False):
+    def act(self, obs, reward, done=False):
+        s = torch.unsqueeze(torch.FloatTensor(obs), 0)
+        action = self.actor(s)[0].detach()
+        action = action / torch.max(action)
+        action = action * 0.6 + 0.6
         return action
 
     def copy_target_update(self):

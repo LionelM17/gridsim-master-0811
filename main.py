@@ -1,6 +1,7 @@
 ﻿# -*- coding: UTF-8 -*-
 import numpy as np
 import torch
+from torch.utils.tensorboard import SummaryWriter
 import copy
 
 from Agent.DoNothingAgent import DoNothingAgent
@@ -10,7 +11,8 @@ from utilize.settings import settings
 import DDPG
 
 def run_task(my_agent):
-
+    max_episode = 10
+    max_timestep = 1000
     for episode in range(max_episode):
         print('------ episode ', episode)
         env = Environment(settings, "EPRIReward")
@@ -22,7 +24,7 @@ def run_task(my_agent):
         
         # while not done:
         for timestep in range(max_timestep):
-            ids = [i for i,x in enumerate(obs.rho) if x > 1.0]
+            ids = [i for i, x in enumerate(obs.rho) if x > 1.0]
             # print("overflow rho: ", [obs.rho[i] for i in ids])    
             print('------ step ', timestep)
             action = my_agent.act(obs, reward, done)
@@ -33,7 +35,7 @@ def run_task(my_agent):
             if done:
                 break
 
-def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters):
+def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
     policy_agent = DDPG.DDPG_Agent(settings.num_gen, action_dim, state_dim)
 
     state, done = env.reset(), False
@@ -50,8 +52,8 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
         if t < parameters["start_timesteps"]:
             action = RandomAgent.act(state)
         else:
-            action =  policy_agent.select_action(np.array(state), eps)
-        #print(action)
+            action = policy_agent.act(np.array(state), eps, done)
+
         next_state, reward, done, info = env.step(action)
         episode_reward += reward
         done_float = float(done)
@@ -83,9 +85,9 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
         if done:
             print(
                 f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f} average_Reward:{episode_reward / episode_timesteps:.3f}")
-            summary.add_scalar('reward', episode_reward, t)
-            summary.add_scalar('average_reward', episode_reward / episode_timesteps, t)
-            summary.add_scalar('episode_timesteps', episode_timesteps, t)
+            summary_writer.add_scalar('reward', episode_reward, t)
+            summary_writer.add_scalar('average_reward', episode_reward / episode_timesteps, t)
+            summary_writer.add_scalar('episode_timesteps', episode_timesteps, t)
             # summary.add_scalar('P_loss', P_loss, t)
             # Reset environment
             state, done = env.reset(), False
@@ -108,6 +110,7 @@ if __name__ == "__main__":
     # my_agent = RandomAgent(settings.num_gen)
     #
     # run_task(my_agent)
+    summary_writer = SummaryWriter()
     parameters = {
         "start_timesteps": 2,
         "initial_eps": 0.9,
@@ -148,4 +151,4 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     replay_buffer = DDPG.StandardBuffer(state_dim, action_dim, parameters["batch_size"], parameters["buffer_size"], device)
-    trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters)
+    trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
