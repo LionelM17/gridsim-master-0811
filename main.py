@@ -48,7 +48,7 @@ def get_state_from_obs(obs):
     return state
 
 def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
-    policy_agent = DDPG.DDPG_Agent(settings, action_dim, state_dim)
+    policy_agent = DDPG.DDPG_Agent(settings, device, action_dim, state_dim)
     rand_agent = RandomAgent(settings.num_gen)
     obs, done = env.reset(), False
     state = get_state_from_obs(obs)
@@ -162,7 +162,7 @@ if __name__ == "__main__":
     action_dim_p = obs.action_space['adjust_gen_p'].shape[0]
     action_dim_v = obs.action_space['adjust_gen_v'].shape[0]
     assert action_dim_v == action_dim_p
-    action_dim = action_dim_p
+    action_dim = action_dim_p + action_dim_v
 
     state = get_state_from_obs(obs)
     state_dim = len(state)

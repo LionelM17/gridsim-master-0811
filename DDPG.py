@@ -75,6 +75,7 @@ class DDPG_Agent(BaseAgent):
     def __init__(
             self,
             settings,
+            device,
             action_dim,
             state_dim,
             gamma=0.99,
@@ -87,6 +88,8 @@ class DDPG_Agent(BaseAgent):
         ):
 
         BaseAgent.__init__(self, settings.num_gen)
+
+        self.device = device
 
         self.settings = settings
         self.action_dim = action_dim
@@ -110,9 +113,10 @@ class DDPG_Agent(BaseAgent):
             , training=True    # ????training flag????training??self.actor_target(state);???test??self.actor_target(obs)
             ):
         adjust_gen_v = np.zeros(self.num_gen)
-        if training:
-            adjust_gen_p = self.actor_target(obs)
-            return form_action(adjust_gen_p, adjust_gen_v)
+        state = state.to(self.device)
+        if not training:
+            adjust_gen_p = self.actor_target(state)
+            return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)
         else:
             if target_flag:
                 adjust_gen_p = self.actor_target(state)[0].detach()
@@ -148,10 +152,12 @@ class DDPG_Agent(BaseAgent):
         # Compute the target Q value using the information of next state
         #action_target = self.actor_target(next_state)
         action_target = self.act(state, obs, target_flag=True)
+        next_state = next_state.to(self.device)
         Q_tmp = self.critic_target(next_state, action_target)
         Q_target = reward + self.gamma * Q_tmp
 
         # Compute the current Q value and the loss
+        state = state.to(self.device)
         Q_current = self.critic(state, action)
         critic_loss = nn.MSELoss()(Q_target, Q_current)
 
