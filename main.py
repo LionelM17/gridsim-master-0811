@@ -9,6 +9,7 @@ from Agent.RandomAgent import RandomAgent
 from Environment.base_env import Environment
 from utilize.settings import settings
 import DDPG
+import json
 
 def run_task(my_agent):
     max_episode = 10
@@ -27,7 +28,7 @@ def run_task(my_agent):
             ids = [i for i, x in enumerate(obs.rho) if x > 1.0]
             # print("overflow rho: ", [obs.rho[i] for i in ids])    
             print('------ step ', timestep)
-            action = my_agent.act(obs, reward, done)
+            action = my_agent.act(obs, reward, done, training=False)
             # print("adjust_gen_p: ", action['adjust_gen_p'])
             # print("adjust_gen_v: ", action['adjust_gen_v'])
             obs, reward, done, info = env.step(action)
@@ -35,10 +36,22 @@ def run_task(my_agent):
             if done:
                 break
 
-def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
-    policy_agent = DDPG.DDPG_Agent(settings.num_gen, action_dim, state_dim)
+def get_state_from_obs(obs):
+    state_form = {'gen_p', 'gen_q', 'gen_v', 'load_p', 'load_q', 'load_v', 'p_or', 'q_or', 'v_or', 'a_or', 'p_ex',
+                  'q_ex', 'v_ex', 'a_ex',
+                  'rho', 'grid_loss', 'curstep_renewable_gen_p_max'}
+    state = []
+    for name in state_form:
+        value = getattr(obs, name)
+        state.append(np.reshape(np.array(value, dtype=np.float32), (-1,)))
+    state = np.concatenate(state)
+    return state
 
-    state, done = env.reset(), False
+def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
+    policy_agent = DDPG.DDPG_Agent(settings, action_dim, state_dim)
+    rand_agent = RandomAgent(settings.num_gen)
+    obs, done = env.reset(), False
+    state = get_state_from_obs(obs)
     episode_start = True
     episode_reward = 0
     episode_timesteps = 0
@@ -47,14 +60,17 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
     eps = policy_agent.initial_eps
 
     # interact with the enviroment for max_timesteps
-    for t in range(parameters.max_timesteps):
+    import ipdb
+    ipdb.set_trace()
+    for t in range(parameters['max_timestep']):
         episode_timesteps += 1
         if t < parameters["start_timesteps"]:
-            action = RandomAgent.act(state)
+            action = rand_agent.act(obs)
         else:
-            action = policy_agent.act(np.array(state), eps, done)
+            action = policy_agent.act(np.array(state), obs)
 
-        next_state, reward, done, info = env.step(action)
+        next_obs, reward, done, info = env.step(action)
+        next_state = get_state_from_obs(next_obs)
         episode_reward += reward
         done_float = float(done)
 
@@ -65,7 +81,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
         # Train agent after collecting sufficient data
         if t >= parameters["start_timesteps"] and (t+1) % parameters["train_freq"] == 0:
-            info = policy_agent.train(replay_buffer)
+            info = policy_agent.train(replay_buffer, obs)
             # for k,v in info.items():
             #     summary.add_scalar(k, v, t)
 
@@ -90,7 +106,8 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
             summary_writer.add_scalar('episode_timesteps', episode_timesteps, t)
             # summary.add_scalar('P_loss', P_loss, t)
             # Reset environment
-            state, done = env.reset(), False
+            obs, done = env.reset(), False
+            state = get_state_from_obs(obs)
             episode_start = True
             episode_reward = 0
             episode_timesteps = 0
@@ -140,15 +157,18 @@ if __name__ == "__main__":
         "buffer_size": 1e6
     }
     # get state dim and action dim
-    state_dim = 10
-
     env = Environment(settings, "EPRIReward")
     obs = env.reset()
-    action_dim_p = obs.action_space['adjust_gen_p'].size()
-    action_dim_v = obs.action_space['adjust_gen_v'].size()
-    action_dim = action_dim_p + action_dim_v
+    action_dim_p = obs.action_space['adjust_gen_p'].shape[0]
+    action_dim_v = obs.action_space['adjust_gen_v'].shape[0]
+    assert action_dim_v == action_dim_p
+    action_dim = action_dim_p
+
+    state = get_state_from_obs(obs)
+    state_dim = len(state)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     replay_buffer = DDPG.StandardBuffer(state_dim, action_dim, parameters["batch_size"], parameters["buffer_size"], device)
     trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
+    run_task(trained_policy_agent)

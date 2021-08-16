@@ -4,8 +4,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from math import *
 
 from Agent.BaseAgent import BaseAgent
+from utilize.form_action import *
 
 class ActorNet(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -47,23 +49,46 @@ class CriticNet(nn.Module):
         action_value = self.out(F.relu(x + y))
         return action_value
 
+# ???????
+def legalize_action(action, settings, obs):
+    adjust_gen_p, adjust_gen_v = action
+    injection_gen_p = [adjust_gen_p[i] + obs.gen_p[i] for i in range(len(adjust_gen_p))]
+    for i in settings.thermal_ids:
+        if injection_gen_p[i] > settings.max_gen_p[i]:
+            adjust_gen_p[i] = settings.max_gen_p[i] - obs.gen_p[i]
+
+        cur_ramp_rate = abs(adjust_gen_p[i]) / settings.max_gen_p[i]
+        if cur_ramp_rate >= settings.ramp_rate:
+            if adjust_gen_p[i] < 0:
+                adjust_gen_p[i] = -(settings.max_gen_p[i] * settings.ramp_rate)
+            elif adjust_gen_p[i] >= 0:
+                adjust_gen_p[i] = settings.max_gen_p[i] * settings.ramp_rate
+
+    for i in settings.renewable_ids:
+        if injection_gen_p[i] >= min(obs.curstep_renewable_gen_p_max[i], settings.max_gen_p[i]):
+            injection_gen_p[i] = min(obs.curstep_renewable_gen_p_max[i], settings.max_gen_p[i])
+
+    action = form_action(adjust_gen_p, adjust_gen_v)
+    return action
+
 class DDPG_Agent(BaseAgent):
     def __init__(
             self,
-            num_gen,
+            settings,
             action_dim,
             state_dim,
-            gamma = 0.99,
-            optimizer = "Adam",
-            optimizer_paoameters = {},
-            tau = 0.001,
-            initial_eps = 1.0,
-            end_eps = 0.001,
-            eps_decay = 5e3,
+            gamma=0.99,
+            optimizer="Adam",
+            optimizer_paoameters={},
+            tau=0.001,
+            initial_eps=1.0,
+            end_eps=0.001,
+            eps_decay=5e3,
         ):
 
-        BaseAgent.__init__(num_gen)
+        BaseAgent.__init__(self, settings.num_gen)
 
+        self.settings = settings
         self.action_dim = action_dim
         self.state_dim = state_dim
         self.state_shape = (-1, state_dim)
@@ -81,12 +106,20 @@ class DDPG_Agent(BaseAgent):
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau)
 
-    def act(self, obs, reward, done=False):
-        s = torch.unsqueeze(torch.FloatTensor(obs), 0)
-        action = self.actor(s)[0].detach()
-        action = action / torch.max(action)
-        action = action * 0.6 + 0.6
-        return action
+    def act(self, state, obs, reward=0.0, done=False, target_flag=False
+            , training=True    # ????training flag????training??self.actor_target(state);???test??self.actor_target(obs)
+            ):
+        adjust_gen_v = np.zeros(self.num_gen)
+        if training:
+            adjust_gen_p = self.actor_target(obs)
+            return form_action(adjust_gen_p, adjust_gen_v)
+        else:
+            if target_flag:
+                adjust_gen_p = self.actor_target(state)[0].detach()
+            else:
+                adjust_gen_p = self.actor(state)[0].detach()
+            action = legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)   #???????
+            return action
 
     def copy_target_update(self):
         # Softly update the target networks
@@ -97,12 +130,13 @@ class DDPG_Agent(BaseAgent):
             eval('self.critic_target.' + x + '.data.mul_((1-self.tau))')
             eval('self.critic_target.' + x + '.data.add_(self.tau*self.critic.' + x + '.data)')
 
-    def train(self, replay_buffer):
+    def train(self, replay_buffer, obs):
         # Sample replay buffer
         state, action, next_state, reward, done = replay_buffer.sample()
 
         # Make action and evaluate its action values
-        action_out = self.actor(state)
+        #action_out = self.actor(state)
+        action_out = self.act(state, obs)
         Q = self.critic(state, action_out)
         actor_loss = -torch.mean(Q)
 
@@ -112,7 +146,8 @@ class DDPG_Agent(BaseAgent):
         self.actor_optimizer.step()
 
         # Compute the target Q value using the information of next state
-        action_target = self.actor_target(next_state)
+        #action_target = self.actor_target(next_state)
+        action_target = self.act(state, obs, target_flag=True)
         Q_tmp = self.critic_target(next_state, action_target)
         Q_target = reward + self.gamma * Q_tmp
 
@@ -153,7 +188,8 @@ class StandardBuffer(object):
         self.crt_size = 0
 
         self.state = np.zeros((self.max_size, state_dim))
-        self.action = np.zeros((self.max_size, num_actions))
+        # self.action = np.zeros((self.max_size, num_actions))
+        self.action = [0 for _ in range(self.max_size)]
         self.next_state = np.array(self.state)
         self.reward = np.zeros((self.max_size, 1))
         self.not_done = np.zeros((self.max_size, 1))
