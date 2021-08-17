@@ -157,7 +157,7 @@ if __name__ == "__main__":
         "seq_len": 3,
         "lstm_batch_size": 1,
         "output_size": 1,
-        "max_timestep": 10,
+        "max_timestep": 100000,
         "max_episode": 1,
         "buffer_size": 1e6
     }
