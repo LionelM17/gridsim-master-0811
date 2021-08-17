@@ -26,9 +26,10 @@ def run_task(my_agent):
         # while not done:
         for timestep in range(max_timestep):
             ids = [i for i, x in enumerate(obs.rho) if x > 1.0]
-            # print("overflow rho: ", [obs.rho[i] for i in ids])    
+            print("overflow rho: ", [obs.rho[i] for i in ids])
             print('------ step ', timestep)
-            action = my_agent.act(obs, reward, done, training=False)
+            state = get_state_from_obs(obs)
+            action, illegal_action_flag = my_agent.act(torch.from_numpy(state), obs, reward, done, training=False)
             # print("adjust_gen_p: ", action['adjust_gen_p'])
             # print("adjust_gen_v: ", action['adjust_gen_v'])
             obs, reward, done, info = env.step(action)
@@ -60,16 +61,18 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
     eps = policy_agent.initial_eps
 
     # interact with the enviroment for max_timesteps
-    import ipdb
-    ipdb.set_trace()
+    # import ipdb
+    # ipdb.set_trace()
     for t in range(parameters['max_timestep']):
         episode_timesteps += 1
         if t < parameters["start_timesteps"]:
-            action = rand_agent.act(obs)
+            action, illegal_action_flag = rand_agent.act(obs), False
         else:
-            action = policy_agent.act(np.array(state), obs)
+            action, illegal_action_flag = policy_agent.act(torch.from_numpy(state), obs)
 
         next_obs, reward, done, info = env.step(action)
+        if illegal_action_flag:
+            reward -= 100
         next_state = get_state_from_obs(next_obs)
         episode_reward += reward
         done_float = float(done)
@@ -81,6 +84,8 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
         # Train agent after collecting sufficient data
         if t >= parameters["start_timesteps"] and (t+1) % parameters["train_freq"] == 0:
+            # import ipdb
+            # ipdb.set_trace()
             info = policy_agent.train(replay_buffer, obs)
             # for k,v in info.items():
             #     summary.add_scalar(k, v, t)
