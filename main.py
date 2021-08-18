@@ -45,7 +45,17 @@ def get_state_from_obs(obs):
     state = []
     for name in state_form:
         value = getattr(obs, name)
-        value = preprocessing.maxabs_scale(np.array(value, dtype=np.float32), axis=0, copy=True)
+        if name == 'gen_p':
+            value = [value[i] / settings.max_gen_p[i] for i in range(len(value))]
+        elif name == 'gen_q':
+            value = [value[i] / settings.max_gen_q[i] for i in range(len(value))]
+        elif name == 'gen_v':
+            value = [value[i] / settings.max_gen_v[i] for i in range(len(value))]
+        elif name == 'load_v':
+            value = [value[i] / settings.max_bus_v[i] for i in range(len(value))]
+        elif name in {'load_p', 'load_q', 'p_or', 'q_or', 'v_or', 'a_or', 'p_ex',
+                      'q_ex', 'v_ex', 'a_ex', 'rho'}:
+            value = preprocessing.minmax_scale(np.array(value, dtype=np.float32), feature_range=(0, 1), axis=0, copy=True)
         state.append(np.reshape(np.array(value, dtype=np.float32), (-1,)))
     state = np.concatenate(state)
     return state
@@ -55,6 +65,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
     rand_agent = RandomAgent(settings.num_gen)
     obs, done = env.reset(), False
     state = get_state_from_obs(obs)
+    print(state)
     episode_start = True
     episode_reward = 0
     episode_timesteps = 0
@@ -159,7 +170,7 @@ if __name__ == "__main__":
         "seq_len": 3,
         "lstm_batch_size": 1,
         "output_size": 1,
-        "max_timestep": 1,
+        "max_timestep": 10,
         "max_episode": 1,
         "buffer_size": 1e6
     }

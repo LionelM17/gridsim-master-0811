@@ -29,8 +29,8 @@ class ActorNet(nn.Module):
         q = F.relu(self.fc1(state))
         q = F.relu(self.fc2(q))
         q = self.out(q)
-        q = preprocessing.maxabs_scale(np.array(q, dtype=np.float32), axis=0, copy=True)
-        # q = torch.tanh(q)
+        # q = preprocessing.maxabs_scale(np.array(q, dtype=np.float32), axis=0, copy=True)
+        q = torch.tanh(q)
         # q = torch.max(q)
         # action = q * 0.005 + 0.059
         return q
@@ -153,7 +153,6 @@ class DDPG_Agent(BaseAgent):
             , training=True    # ????training flag????training??self.actor_target(state);???test??self.actor_target(obs)
             ):
         state = state.to(self.device)
-        print(self.settings.max_gen_p)
         if not training:
             adjust_gen_p = self.actor_target(state).detach().cpu().numpy()
             adjust_gen_v = np.zeros_like(adjust_gen_p)
