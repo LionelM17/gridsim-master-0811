@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 import copy
+from sklearn import preprocessing
 
 from Agent.DoNothingAgent import DoNothingAgent
 from Agent.RandomAgent import RandomAgent
@@ -44,6 +45,7 @@ def get_state_from_obs(obs):
     state = []
     for name in state_form:
         value = getattr(obs, name)
+        value = preprocessing.maxabs_scale(np.array(value, dtype=np.float32), axis=0, copy=True)
         state.append(np.reshape(np.array(value, dtype=np.float32), (-1,)))
     state = np.concatenate(state)
     return state
@@ -69,7 +71,6 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
             action, illegal_action_flag = rand_agent.act(obs), False
         else:
             action, illegal_action_flag = policy_agent.act(torch.from_numpy(state), obs)
-
         next_obs, reward, done, info = env.step(action)
         if illegal_action_flag:
             reward -= 100
@@ -92,6 +93,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
         if (t % 16 == 0):
             policy_agent.copy_target_update()
+            done = True
         # input_data = input[t:t + 200]
         # policy, episode_reward = MPC_control(t, env, input_data, parameters["control_circle"], policy, state,
         #                                      replay_buffer, 5)
@@ -105,7 +107,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
         if done:
             print(
-                "Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f} average_Reward:{episode_reward / episode_timesteps:.3f}")
+                f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f} average_Reward:{episode_reward / episode_timesteps:.3f}")
             summary_writer.add_scalar('reward', episode_reward, t)
             summary_writer.add_scalar('average_reward', episode_reward / episode_timesteps, t)
             summary_writer.add_scalar('episode_timesteps', episode_timesteps, t)
@@ -121,7 +123,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
                 eps *= policy_agent.eps_decay
             else:
                 eps = policy_agent.end_eps
-            #print(eps)
+            # print(obs.flag)
 
     return policy_agent
 
@@ -134,7 +136,7 @@ if __name__ == "__main__":
     # run_task(my_agent)
     summary_writer = SummaryWriter()
     parameters = {
-        "start_timesteps": 2,
+        "start_timesteps": 1,
         "initial_eps": 0.9,
         "end_eps": 0.001,
         "eps_decay": 0.99,
@@ -142,7 +144,7 @@ if __name__ == "__main__":
         "eval_freq": int(5e2),
         # Learning
         "gamma": 0.99,
-        "batch_size": 16,
+        "batch_size": 4,
         "optimizer": "Adam",
         "optimizer_parameters": {
             "lr": 5e-3
@@ -157,7 +159,7 @@ if __name__ == "__main__":
         "seq_len": 3,
         "lstm_batch_size": 1,
         "output_size": 1,
-        "max_timestep": 100000,
+        "max_timestep": 1,
         "max_episode": 1,
         "buffer_size": 1e6
     }
@@ -167,7 +169,7 @@ if __name__ == "__main__":
     action_dim_p = obs.action_space['adjust_gen_p'].shape[0]
     action_dim_v = obs.action_space['adjust_gen_v'].shape[0]
     assert action_dim_v == action_dim_p
-    action_dim = action_dim_p + action_dim_v
+    action_dim = action_dim_p
 
     state = get_state_from_obs(obs)
     state_dim = len(state)
@@ -175,5 +177,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     replay_buffer = DDPG.StandardBuffer(state_dim, action_dim, parameters["batch_size"], parameters["buffer_size"], device)
+
+    # print(obs.gen_p, obs.gen_v, obs.action_space)
     trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
-    run_task(trained_policy_agent)
+    # run_task(trained_policy_agent)

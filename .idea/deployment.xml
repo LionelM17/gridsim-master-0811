@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="shaohuai@124.207.100.130:999 password" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="lmh@47.105.219.184:6200 password" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
+      <paths name="lmh@47.105.219.184:6200 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/lmh/mxt" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="shaohuai@124.207.100.130:999 password">
         <serverdata>
           <mappings>

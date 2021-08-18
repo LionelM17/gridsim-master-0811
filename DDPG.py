@@ -4,14 +4,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from sklearn import preprocessing
 from math import *
 
 from Agent.BaseAgent import BaseAgent
 from utilize.form_action import *
 
 class ActorNet(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, settings):
         super(ActorNet, self).__init__()
+        self.settings = settings
 
         self.fc1 = nn.Linear(state_dim, 1024)
         self.fc1.weight.data.normal_(0, 0.1)
@@ -27,7 +29,8 @@ class ActorNet(nn.Module):
         q = F.relu(self.fc1(state))
         q = F.relu(self.fc2(q))
         q = self.out(q)
-        # #q = torch.tanh(q)
+        q = preprocessing.maxabs_scale(np.array(q, dtype=np.float32), axis=0, copy=True)
+        # q = torch.tanh(q)
         # q = torch.max(q)
         # action = q * 0.005 + 0.059
         return q
@@ -56,20 +59,23 @@ def legalize_action(action, settings, obs):
     if len(adjust_gen_p.shape) > 1:
         batch_size = adjust_gen_p.shape[0]
         action_dim = adjust_gen_p.shape[1]
-        injection_gen_p = np.asarray([adjust_gen_p[:, i] + obs.gen_p[i] for i in range(action_dim)]).transpose()
+        injection_gen_p = np.asarray([(adjust_gen_p[:, i] * settings.max_gen_p[i]) + obs.gen_p[i] for i in range(action_dim)]).transpose()
         for j in range(batch_size):
             for i in settings.thermal_ids:
                 if injection_gen_p[j][i] > settings.max_gen_p[i]:
-                    adjust_gen_p[j][i] = settings.max_gen_p[i] - obs.gen_p[i]
+                    adjust_gen_p[j, i] = settings.max_gen_p[i] - obs.gen_p[i]
+                    illegal_action_flag = True
+                elif injection_gen_p[j][i] < 0:
+                    adjust_gen_p[j, i] = - obs.gen_p[i]
                     illegal_action_flag = True
 
-                cur_ramp_rate = abs(adjust_gen_p[j][i]) / settings.max_gen_p[i]
+                cur_ramp_rate = abs(adjust_gen_p[j, i]) / settings.max_gen_p[i]
                 if cur_ramp_rate >= settings.ramp_rate:
                     illegal_action_flag = True
-                    if adjust_gen_p[j][i] < 0:
-                        adjust_gen_p[j][i] = -(settings.max_gen_p[i] * settings.ramp_rate)
-                    elif adjust_gen_p[j][i] >= 0:
-                        adjust_gen_p[j][i] = settings.max_gen_p[i] * settings.ramp_rate
+                    if adjust_gen_p[j, i] < 0:
+                        adjust_gen_p[j, i] = -(settings.max_gen_p[i] * settings.ramp_rate)
+                    elif adjust_gen_p[j, i] >= 0:
+                        adjust_gen_p[j, i] = settings.max_gen_p[i] * settings.ramp_rate
 
             # TODO: nextstep_gen_p is more reasonable?
             idx = 0
@@ -79,7 +85,7 @@ def legalize_action(action, settings, obs):
                     adjust_gen_p[j][i] = min(obs.curstep_renewable_gen_p_max[idx], settings.max_gen_p[i]) - obs.gen_p[i]
                 idx += 1
     else:
-        injection_gen_p = [adjust_gen_p[i] + obs.gen_p[i] for i in range(len(adjust_gen_p))]
+        injection_gen_p = [(adjust_gen_p[i] * settings.max_gen_p[i]) + obs.gen_p[i] for i in range(len(adjust_gen_p))]
         for i in settings.thermal_ids:
             if injection_gen_p[i] > settings.max_gen_p[i]:
                 adjust_gen_p[i] = settings.max_gen_p[i] - obs.gen_p[i]
@@ -136,9 +142,9 @@ class DDPG_Agent(BaseAgent):
         self.end_eps = end_eps
         self.eps_decay = eps_decay
 
-        self.actor = ActorNet(state_dim, action_dim).to('cuda')
+        self.actor = ActorNet(state_dim, action_dim, self.settings).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
-        self.critic = CriticNet(state_dim, action_dim).to('cuda')
+        self.critic = CriticNet(state_dim, action_dim).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau)
@@ -147,15 +153,16 @@ class DDPG_Agent(BaseAgent):
             , training=True    # ????training flag????training??self.actor_target(state);???test??self.actor_target(obs)
             ):
         state = state.to(self.device)
+        print(self.settings.max_gen_p)
         if not training:
-            adjust_gen_p = self.actor_target(state.to('cuda')).detach().cpu().numpy()
+            adjust_gen_p = self.actor_target(state).detach().cpu().numpy()
             adjust_gen_v = np.zeros_like(adjust_gen_p)
             return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)
         else:
             if target_flag:
-                adjust_gen_p = self.actor_target(state.to('cuda')).detach().cpu().numpy()
+                adjust_gen_p = self.actor_target(state).detach().cpu().numpy()
             else:
-                adjust_gen_p = self.actor(state.to('cuda')).detach().cpu().numpy()
+                adjust_gen_p = self.actor(state).detach().cpu().numpy()
             adjust_gen_v = np.zeros_like(adjust_gen_p)
             return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)   #???????
 
@@ -172,11 +179,11 @@ class DDPG_Agent(BaseAgent):
     def train(self, replay_buffer, obs):
         # Sample replay buffer
         state, action, next_state, reward, done = replay_buffer.sample()
-
+        state = state.to(self.device)
         # Make action and evaluate its action values
         # action_out = self.actor(state)
         action_out, illegal_action_flag = self.act(state, obs)
-        Q = self.critic(state, torch.from_numpy(action_out['adjust_gen_p']).to('cuda'))
+        Q = self.critic(state, torch.from_numpy(action_out['adjust_gen_p']).to(self.device))
         actor_loss = -torch.mean(Q)
 
         # Optimize the actor network
@@ -186,8 +193,9 @@ class DDPG_Agent(BaseAgent):
 
         # Compute the target Q value using the information of next state
         #action_target = self.actor_target(next_state)
+        next_state = next_state.to(self.device)
         action_target, illegal_action_flag = self.act(state, obs, target_flag=True)
-        Q_tmp = self.critic_target(next_state, torch.from_numpy(action_target['adjust_gen_p']).to('cuda'))
+        Q_tmp = self.critic_target(next_state, torch.from_numpy(action_target['adjust_gen_p']).to(self.device))
         Q_target = reward + self.gamma * Q_tmp
 
         # Compute the current Q value and the loss
