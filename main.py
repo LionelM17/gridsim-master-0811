@@ -11,6 +11,9 @@ from Environment.base_env import Environment
 from utilize.settings import settings
 import DDPG
 import json
+import warnings
+# don't print warnings
+warnings.filterwarnings("ignore")
 
 def run_task(my_agent):
     max_episode = 10
@@ -45,6 +48,7 @@ def get_state_from_obs(obs):
     state = []
     for name in state_form:
         value = getattr(obs, name)
+        # normalization the state
         if name == 'gen_p':
             value = [value[i] / settings.max_gen_p[i] for i in range(len(value))]
         elif name == 'gen_q':
@@ -61,16 +65,17 @@ def get_state_from_obs(obs):
     return state
 
 def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
+
     policy_agent = DDPG.DDPG_Agent(settings, device, action_dim, state_dim)
     rand_agent = RandomAgent(settings.num_gen)
+
+    # initialization the env and parameters
     obs, done = env.reset(), False
     state = get_state_from_obs(obs)
-    print(state)
     episode_start = True
     episode_reward = 0
     episode_timesteps = 0
     episode_num = 0
-
     eps = policy_agent.initial_eps
 
     # interact with the enviroment for max_timesteps
@@ -78,42 +83,38 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
     # ipdb.set_trace()
     for t in range(parameters['max_timestep']):
         episode_timesteps += 1
-        if t < parameters["start_timesteps"]:
+
+        # greedy eps
+        if np.random.uniform(0, 1) < eps:
             action, illegal_action_flag = rand_agent.act(obs), False
         else:
             action, illegal_action_flag = policy_agent.act(torch.from_numpy(state), obs)
+
+        # env step
         next_obs, reward, done, info = env.step(action)
         if illegal_action_flag:
-            reward -= 100
+            reward -= 10
         next_state = get_state_from_obs(next_obs)
         episode_reward += reward
         done_float = float(done)
 
-        # add to replaybuffer
+        # add to replaybuffer and update obs, state
         replay_buffer.add(state, action, next_state, reward, done_float, done, episode_start)
+        obs = copy.copy(next_obs)
         state = copy.copy(next_state)
         episode_start = False
 
         # Train agent after collecting sufficient data
-        if t >= parameters["start_timesteps"] and (t+1) % parameters["train_freq"] == 0:
+        if t >= parameters["start_timesteps"]:
             # import ipdb
             # ipdb.set_trace()
-            info = policy_agent.train(replay_buffer, obs)
-            # for k,v in info.items():
-            #     summary.add_scalar(k, v, t)
+            info_train = policy_agent.train(replay_buffer, obs)
+            for k,v in info_train.items():
+                summary.add_scalar(k, v, t)
 
-        if (t % 16 == 0):
+        # copy agent to target_agent
+        if t % 16 == 0:
             policy_agent.copy_target_update()
-            done = True
-        # input_data = input[t:t + 200]
-        # policy, episode_reward = MPC_control(t, env, input_data, parameters["control_circle"], policy, state,
-        #                                      replay_buffer, 5)
-        # action = policy.select_action(np.array(state), eps)
-        # next_state, reward, done, P_loss = env.step(action)
-        # state = copy.copy(next_state)
-        # info = policy.train(replay_buffer)
-        # for k, v in info.items():
-        #     summary.add_scalar(k, v, t)
         episode_start = False
 
         if done:
@@ -134,33 +135,25 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
                 eps *= policy_agent.eps_decay
             else:
                 eps = policy_agent.end_eps
-            # print(obs.flag)
 
     return policy_agent
 
 if __name__ == "__main__":
-    # max_timestep = 10  # 最大时间步数
-    # max_episode = 1  # 回合数
-    #
-    # my_agent = RandomAgent(settings.num_gen)
-    #
-    # run_task(my_agent)
     summary_writer = SummaryWriter()
     parameters = {
-        "start_timesteps": 1,
+        "start_timesteps": 2,
         "initial_eps": 0.9,
         "end_eps": 0.001,
-        "eps_decay": 0.99,
+        "eps_decay": 0.999,
         # Evaluation
         "eval_freq": int(5e2),
         # Learning
         "gamma": 0.99,
-        "batch_size": 4,
+        "batch_size": 16,
         "optimizer": "Adam",
         "optimizer_parameters": {
             "lr": 5e-3
         },
-        "train_freq": 1,
         "target_update_fre": 1,
         "tau": 0.001,
         "control_circle": 3,
@@ -170,7 +163,7 @@ if __name__ == "__main__":
         "seq_len": 3,
         "lstm_batch_size": 1,
         "output_size": 1,
-        "max_timestep": 10,
+        "max_timestep": 1000000,
         "max_episode": 1,
         "buffer_size": 1e6
     }
@@ -189,6 +182,8 @@ if __name__ == "__main__":
 
     replay_buffer = DDPG.StandardBuffer(state_dim, action_dim, parameters["batch_size"], parameters["buffer_size"], device)
 
-    # print(obs.gen_p, obs.gen_v, obs.action_space)
     trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
     # run_task(trained_policy_agent)
+    # print (obs.action_space['adjust_gen_p'].high[0:10])
+    # for i in settings.renewable_ids:
+    #     print (i, obs.gen_p[i], obs.curstep_renewable_gen_p_max[i], obs.nextstep_renewable_gen_p_max[i])
