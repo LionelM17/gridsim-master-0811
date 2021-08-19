@@ -26,19 +26,22 @@ class ActorNet(nn.Module):
         # self.l2 = nn.Linear(64, action_dim)
 
     def forward(self, state):
-        q = F.relu(self.fc1(state))
-        q = F.relu(self.fc2(q))
+        q = self.fc1(state)
+        # q = F.relu(self.fc1(state))
+        q = self.fc2(q)
+        # q = F.relu(self.fc2(q))
         q = self.out(q)
         # q = preprocessing.maxabs_scale(np.array(q, dtype=np.float32), axis=0, copy=True)
-        q = torch.tanh(q)
+        # q = torch.tanh(q)
+        q = torch.sigmoid(q)
         # q = torch.max(q)
         # action = q * 0.005 + 0.059
         return q
 
     def get_gradients(self):
         grads = []
-        import ipdb
-        ipdb.set_trace()
+        # import ipdb
+        # ipdb.set_trace()
         for p in self.parameters():
             grad = None if p.grad is None else p.grad.data.cpu().numpy()
             grads.append(grad)
@@ -63,8 +66,8 @@ class CriticNet(nn.Module):
 
     def get_gradients(self):
         grads = []
-        import ipdb
-        ipdb.set_trace()
+        # import ipdb
+        # ipdb.set_trace()
         for p in self.parameters():
             grad = None if p.grad is None else p.grad.data.cpu().numpy()
             grads.append(grad)
@@ -183,20 +186,22 @@ class DDPG_Agent(BaseAgent):
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau)
 
     def act(self, state, obs, reward=0.0, done=False, target_flag=False
-            , training=True    # ????training flag????training??self.actor_target(state);???test??self.actor_target(obs)
+            # , training=True    # ????training flag????training??self.actor_target(state);???test??self.actor_target(obs)
             ):
         state = state.to(self.device)
-        if not training:
-            adjust_gen_p = self.actor_target(state).detach().cpu().numpy()
-            adjust_gen_v = np.zeros_like(adjust_gen_p)
-            return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)
-        else:
-            if target_flag:
-                adjust_gen_p = self.actor_target(state).detach().cpu().numpy()
-            else:
-                adjust_gen_p = self.actor(state).detach().cpu().numpy()
-            adjust_gen_v = np.zeros_like(adjust_gen_p)
-            return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)   #???????
+        # if not training:
+        adjust_gen_p = self.actor_target(state).detach().cpu().numpy()
+        adjust_gen_v = np.zeros_like(adjust_gen_p)
+        return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)
+        # else:
+        #     if target_flag:
+        #         adjust_gen_p = self.actor_target(state)
+        #     else:
+        #         adjust_gen_p = self.actor(state)
+            # adjust_gen_v = np.zeros_like(adjust_gen_p)
+            # adjust_gen_v = torch.zeros_like(adjust_gen_p)
+            # return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)   #???????
+            # return form_action(adjust_gen_p, adjust_gen_v)
 
 
     def copy_target_update(self):
@@ -214,24 +219,25 @@ class DDPG_Agent(BaseAgent):
         state = state.to(self.device)
         # Make action and evaluate its action values
         # TODO: is legalize_action necessary in train ?
-        # action_out = self.actor(state)
-        action_out, illegal_action_flag = self.act(state, obs)
-        Q = self.critic(state, torch.from_numpy(action_out['adjust_gen_p']).to(self.device))
+        # action_out, illegal_action_flag = self.act(state, obs)
+        action_out = self.actor(state)
+        # Q = self.critic(state, torch.from_numpy(action_out['adjust_gen_p']).to(self.device))
+        Q = self.critic(state, action_out)
         actor_loss = -torch.mean(Q)
 
         # Optimize the actor network
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        import ipdb
-        ipdb.set_trace()
-        print(f'actor gradient max={max(self.actor.get_gradients())}')
+        print(f'actor gradient max={max([p.max() for p in self.actor.get_gradients()])}')
         self.actor_optimizer.step()
 
         # Compute the target Q value using the information of next state
         #action_target = self.actor_target(next_state)
         next_state = next_state.to(self.device)
-        action_target, illegal_action_flag = self.act(state, obs, target_flag=True)
-        Q_tmp = self.critic_target(next_state, torch.from_numpy(action_target['adjust_gen_p']).to(self.device))
+        # action_target, illegal_action_flag = self.act(state, obs, target_flag=True)
+        action_target = self.actor_target(state)
+        # Q_tmp = self.critic_target(next_state, torch.from_numpy(action_target['adjust_gen_p']).to(self.device))
+        Q_tmp = self.critic_target(next_state, action_target)
         Q_target = reward + self.gamma * Q_tmp
 
         # Compute the current Q value and the loss
@@ -242,7 +248,7 @@ class DDPG_Agent(BaseAgent):
         # Optimize the critic network
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        print(f'critic gradient max={max(self.critic.get_gradients())}')
+        print(f'critic gradient max={max([p.max() for p in self.critic.get_gradients()])}')
         self.critic_optimizer.step()
 
         return {

@@ -11,7 +11,9 @@ from Environment.base_env import Environment
 from utilize.settings import settings
 import DDPG
 import json
-import ray
+# import ray
+import warnings
+warnings.filterwarnings('ignore')
 
 def run_task(my_agent):
     max_episode = 10
@@ -44,17 +46,17 @@ def get_state_from_obs(obs):
     state = []
     for name in state_form:
         value = getattr(obs, name)
-        # if name == 'gen_p':
-        #     value = [value[i] / settings.max_gen_p[i] for i in range(len(value))]
-        # elif name == 'gen_q':
-        #     value = [value[i] / settings.max_gen_q[i] for i in range(len(value))]
-        # elif name == 'gen_v':
-        #     value = [value[i] / settings.max_gen_v[i] for i in range(len(value))]
-        # elif name == 'load_v':
-        #     value = [value[i] / settings.max_bus_v[i] for i in range(len(value))]
-        # elif name in {'load_p', 'load_q', 'p_or', 'q_or', 'v_or', 'a_or', 'p_ex',
-        #               'q_ex', 'v_ex', 'a_ex', 'rho'}:
-        #     value = preprocessing.minmax_scale(np.array(value, dtype=np.float32), feature_range=(0, 1), axis=0, copy=True)
+        if name == 'gen_p':
+            value = [value[i] / settings.max_gen_p[i] for i in range(len(value))]
+        elif name == 'gen_q':
+            value = [value[i] / settings.max_gen_q[i] for i in range(len(value))]
+        elif name == 'gen_v':
+            value = [value[i] / settings.max_gen_v[i] for i in range(len(value))]
+        elif name == 'load_v':
+            value = [value[i] / settings.max_bus_v[i] for i in range(len(value))]
+        elif name in {'load_p', 'load_q', 'p_or', 'q_or', 'v_or', 'a_or', 'p_ex',
+                      'q_ex', 'v_ex', 'a_ex', 'rho'}:
+            value = preprocessing.minmax_scale(np.array(value, dtype=np.float32), feature_range=(0, 1), axis=0, copy=True)
         state.append(np.reshape(np.array(value, dtype=np.float32), (-1,)))
     state = np.concatenate(state)
     return state
@@ -129,7 +131,6 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
                 eps *= policy_agent.eps_decay
             else:
                 eps = policy_agent.end_eps
-            #print(eps)
 
     return policy_agent
 
@@ -142,7 +143,7 @@ if __name__ == "__main__":
     # run_task(my_agent)
     summary_writer = SummaryWriter()
     parameters = {
-        "start_timesteps": 100,
+        "start_timesteps": 10,
         "initial_eps": 0.9,
         "end_eps": 0.001,
         "eps_decay": 0.99,
