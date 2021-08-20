@@ -17,7 +17,8 @@ warnings.filterwarnings('ignore')
 
 def run_task(my_agent):
     max_episode = 10
-    max_timestep = 1000
+    max_timestep = 10000
+    episode_reward = [0 for _ in range(max_episode)]
     for episode in range(max_episode):
         print('------ episode ', episode)
         env = Environment(settings, "EPRIReward")
@@ -33,11 +34,15 @@ def run_task(my_agent):
             print("overflow rho: ", [obs.rho[i] for i in ids])
             print('------ step ', timestep)
             state = get_state_from_obs(obs)
-            action, illegal_action_flag = my_agent.act(torch.from_numpy(state), obs, reward, done, training=False)
+            action = my_agent.act(torch.from_numpy(state).to('cuda'), obs, done)
             obs, reward, done, info = env.step(action)
-            print('info:', info)
+            episode_reward[episode] += reward
             if done:
+                print('info:', info)
+                print(f'episode cumulative reward={episode_reward[episode]}')
                 break
+
+        return sum(episode_reward) / len(episode_reward)
 
 def get_state_from_obs(obs):
     state_form = {'gen_p', 'gen_q', 'gen_v', 'load_p', 'load_q', 'load_v', 'p_or', 'q_or', 'v_or', 'a_or', 'p_ex',
@@ -62,7 +67,9 @@ def get_state_from_obs(obs):
     return state
 
 def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
-    policy_agent = DDPG.DDPG_Agent(settings, device, action_dim, state_dim)
+    policy_agent = DDPG.DDPG_Agent(settings, device, action_dim, state_dim, gamma=parameters['gamma'],
+                                   tau=parameters['tau'], initial_eps=parameters['initial_eps'],
+                                   end_eps=parameters['end_eps'], eps_decay=parameters['eps_decay'])
     rand_agent = RandomAgent(settings.num_gen)
     obs, done = env.reset(), False
     state = get_state_from_obs(obs)
@@ -76,46 +83,38 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
     # interact with the enviroment for max_timesteps
     for t in range(parameters['max_timestep']):
         episode_timesteps += 1
-        if t < parameters["start_timesteps"]:
-            action, illegal_action_flag = rand_agent.act(obs), False
-        else:
-            # TODO: add epsilon-greedy.
-            action, illegal_action_flag = policy_agent.act(torch.from_numpy(state), obs)
 
+        # greedy eps
+        if np.random.uniform(0, 1) < eps:
+            action = rand_agent.act(obs)
+            # action_ori = action
+        else:
+            action = policy_agent.act(torch.from_numpy(state), obs)
+
+        # env step
         next_obs, reward, done, info = env.step(action)
-        if illegal_action_flag:
-            reward -= 0.5
-        next_state = get_state_from_obs(next_obs)
-        episode_reward += reward
-        done_float = float(done)
-        # add to replaybuffer
-        replay_buffer.add(state, action, next_state, reward, done_float, done, episode_start)
-        state = copy.copy(next_state)
-        obs = copy.copy(next_obs)
-        episode_start = False
 
         # Train agent after collecting sufficient data
-        if t >= parameters["start_timesteps"] and (t+1) % parameters["train_freq"] == 0:
-            info = policy_agent.train(replay_buffer, obs)
-            # for k,v in info.items():
-            #     summary.add_scalar(k, v, t)
+        if t >= parameters["start_timesteps"]:
+            info_train = policy_agent.train(replay_buffer, obs, next_obs)
+            for k, v in info_train.items():
+                summary_writer.add_scalar(k, v, t)
 
         if (t % parameters["target_update_interval"] == 0):
             policy_agent.copy_target_update()
-        # input_data = input[t:t + 200]
-        # policy, episode_reward = MPC_control(t, env, input_data, parameters["control_circle"], policy, state,
-        #                                      replay_buffer, 5)
-        # action = policy.select_action(np.array(state), eps)
-        # next_state, reward, done, P_loss = env.step(action)
-        # state = copy.copy(next_state)
-        # info = policy.train(replay_buffer)
-        # for k, v in info.items():
-        #     summary.add_scalar(k, v, t)
         episode_start = False
 
+        next_state = get_state_from_obs(next_obs)
+        episode_reward += reward
+        # add to replaybuffer
+        replay_buffer.add(state, action, next_state, reward, done, episode_start)
+        state = copy.copy(next_state)
+        obs = copy.copy(next_obs)
+
         if done:
+            print(info)
             print(
-                f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f} average_Reward:{episode_reward / episode_timesteps:.3f}")
+                f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
             summary_writer.add_scalar('reward', episode_reward, t)
             summary_writer.add_scalar('average_reward', episode_reward / episode_timesteps, t)
             summary_writer.add_scalar('episode_timesteps', episode_timesteps, t)
@@ -131,22 +130,23 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
                 eps *= policy_agent.eps_decay
             else:
                 eps = policy_agent.end_eps
+            print(f'epsilon={eps:.3f}')
 
+        if t > 0 and t % parameters["model_save_interval"] == 0:
+            policy_agent.save(f'./models/model_{t}')
+
+        if t % parameters["test_interval"] == 0 and t > 0:
+            mean_score = run_task(policy_agent)
+            summary_writer.add_scalar('test_mean_score', mean_score, t)
     return policy_agent
 
 if __name__ == "__main__":
-    # max_timestep = 10  # 最大时间步数
-    # max_episode = 1  # 回合数
-    #
-    # my_agent = RandomAgent(settings.num_gen)
-    #
-    # run_task(my_agent)
     summary_writer = SummaryWriter()
     parameters = {
         "start_timesteps": 10,
         "initial_eps": 0.9,
         "end_eps": 0.001,
-        "eps_decay": 0.99,
+        "eps_decay": 0.999,
         # Evaluation
         "eval_freq": int(5e2),
         # Learning
@@ -158,7 +158,7 @@ if __name__ == "__main__":
         },
         "train_freq": 1,
         "target_update_fre": 1,
-        "tau": 0.02,
+        "tau": 0.001,
         "control_circle": 3,
         "input_size": 10,
         "hidden_size": 35,
@@ -169,7 +169,9 @@ if __name__ == "__main__":
         "max_timestep": 10000000,
         "max_episode": 1,
         "buffer_size": 1000 * 1000,
-        "target_update_interval": 200
+        "target_update_interval": 200,
+        "model_save_interval": 10000,
+        "test_interval": 1000
     }
     # get state dim and action dim
     env = Environment(settings, "EPRIReward")
@@ -177,7 +179,7 @@ if __name__ == "__main__":
     action_dim_p = obs.action_space['adjust_gen_p'].shape[0]
     action_dim_v = obs.action_space['adjust_gen_v'].shape[0]
     assert action_dim_v == action_dim_p
-    action_dim = action_dim_p
+    action_dim = action_dim_p + action_dim_v
 
     state = get_state_from_obs(obs)
     state_dim = len(state)

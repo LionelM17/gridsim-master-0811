@@ -21,27 +21,21 @@ class ActorNet(nn.Module):
         self.fc2.weight.data.normal_(0, 0.1)
         self.out = nn.Linear(256, action_dim)
         self.out.weight.data.normal_(0, 0.1)
-
+        # TODO: add scale layer
         # self.l1 = nn.Linear(state_dim, 64)
         # self.l2 = nn.Linear(64, action_dim)
 
-    def forward(self, state):
-        q = self.fc1(state)
-        # q = F.relu(self.fc1(state))
-        q = self.fc2(q)
-        # q = F.relu(self.fc2(q))
-        q = self.out(q)
-        # q = preprocessing.maxabs_scale(np.array(q, dtype=np.float32), axis=0, copy=True)
-        # q = torch.tanh(q)
-        q = torch.sigmoid(q)
-        # q = torch.max(q)
-        # action = q * 0.005 + 0.059
-        return q
+    def forward(self, state, action_high, action_low):
+        m = self.fc1(state)
+        m = self.fc2(m)
+        m = self.out(m)
+        m = torch.sigmoid(m)
+        m = (m + torch.ones_like(m).to('cuda')) / (2*torch.ones_like(m).to('cuda'))\
+            * (action_high - action_low) + action_low
+        return m
 
     def get_gradients(self):
         grads = []
-        # import ipdb
-        # ipdb.set_trace()
         for p in self.parameters():
             grad = None if p.grad is None else p.grad.data.cpu().numpy()
             grads.append(grad)
@@ -66,86 +60,39 @@ class CriticNet(nn.Module):
 
     def get_gradients(self):
         grads = []
-        # import ipdb
-        # ipdb.set_trace()
         for p in self.parameters():
             grad = None if p.grad is None else p.grad.data.cpu().numpy()
             grads.append(grad)
         return grads
 
+def get_action_space(obs, settings):
+    action_high = np.asarray([obs.action_space['adjust_gen_p'].high, obs.action_space['adjust_gen_v'].high]).flatten()
+    action_high = np.where(np.isinf(action_high), np.full_like(action_high, 0), action_high)
+    action_low = np.asarray([obs.action_space['adjust_gen_p'].low, obs.action_space['adjust_gen_v'].low]).flatten()
+    action_low = np.where(np.isinf(action_low), np.full_like(action_low, 0), action_low)
+    action_high = torch.from_numpy(action_high)
+    action_low = torch.from_numpy(action_low)
+    return action_high, action_low
+
 # ???????
 def legalize_action(action, settings, obs):
-    illegal_action_flag = False
+
     adjust_gen_p, adjust_gen_v = action
     if len(adjust_gen_p.shape) > 1:
-        batch_size = adjust_gen_p.shape[0]
         action_dim = adjust_gen_p.shape[1]
-        for j in range(batch_size):
-            for i in range(action_dim):
-                if adjust_gen_p[j][i] > obs.action_space['adjust_gen_p'].high[i]:
-                    adjust_gen_p[j][i] = obs.action_space['adjust_gen_p'].high[i]
-                    illegal_action_flag = True
-                elif adjust_gen_p[j][i] < obs.action_space['adjust_gen_p'].low[i]:
-                    adjust_gen_p[j][i] = obs.action_space['adjust_gen_p'].low[i]
-                    illegal_action_flag = True
-
-        # injection_gen_p = np.asarray([adjust_gen_p[:, i] + obs.gen_p[i] for i in range(action_dim)]).transpose()
-        # for j in range(batch_size):
-        #     for i in settings.thermal_ids:
-        #         if injection_gen_p[j][i] > settings.max_gen_p[i]:
-        #             adjust_gen_p[j][i] = settings.max_gen_p[i] - obs.gen_p[i]
-        #             illegal_action_flag = True
-        #
-        #
-        #         cur_ramp_rate = abs(adjust_gen_p[j][i]) / settings.max_gen_p[i]
-        #         if cur_ramp_rate >= settings.ramp_rate:
-        #             illegal_action_flag = True
-        #             if adjust_gen_p[j][i] < 0:
-        #                 adjust_gen_p[j][i] = -(settings.max_gen_p[i] * settings.ramp_rate)
-        #             elif adjust_gen_p[j][i] >= 0:
-        #                 adjust_gen_p[j][i] = settings.max_gen_p[i] * settings.ramp_rate
-        #
-        #     # TODO: nextstep_gen_p is more reasonable?
-        #     idx = 0
-        #     for i in settings.renewable_ids:
-        #         if injection_gen_p[j][i] >= min(obs.curstep_renewable_gen_p_max[idx], settings.max_gen_p[i]):
-        #             illegal_action_flag = True
-        #             adjust_gen_p[j][i] = min(obs.curstep_renewable_gen_p_max[idx], settings.max_gen_p[i]) - obs.gen_p[i]
-        #         idx += 1
+        # TODO: follow siyang
+        for i in range(action_dim):
+            adjust_gen_p[:, i] = (adjust_gen_p[:, i] + 1) / 2 \
+                                 * (obs.action_space['adjust_gen_p'].high[i] - obs.action_space['adjust_gen_p'].low[i]) \
+                                 + obs.action_space['adjust_gen_p'].low[i]
     else:
-        for i in range(adjust_gen_p.shape[0]):
-            if adjust_gen_p[i] > obs.action_space['adjust_gen_p'].high[i]:
-                adjust_gen_p[i] = obs.action_space['adjust_gen_p'].high[i]
-                illegal_action_flag = True
-            elif adjust_gen_p[i] < obs.action_space['adjust_gen_p'].low[i]:
-                adjust_gen_p[i] = obs.action_space['adjust_gen_p'].low[i]
-                illegal_action_flag = True
+        action_dim = adjust_gen_p.shape[0]
+        for i in range(action_dim):
+            adjust_gen_p[i] = (adjust_gen_p[i] + 1) / 2 \
+                                 * (obs.action_space['adjust_gen_p'].high[i] - obs.action_space['adjust_gen_p'].low[i]) \
+                                 + obs.action_space['adjust_gen_p'].low[i]
 
-        # injection_gen_p = [adjust_gen_p[i] + obs.gen_p[i] for i in range(len(adjust_gen_p))]
-        # for i in settings.thermal_ids:
-        #     if injection_gen_p[i] > settings.max_gen_p[i]:
-        #         adjust_gen_p[i] = settings.max_gen_p[i] - obs.gen_p[i]
-        #         illegal_action_flag = True
-        #
-        #     cur_ramp_rate = abs(adjust_gen_p[i]) / settings.max_gen_p[i]
-        #     if cur_ramp_rate >= settings.ramp_rate:
-        #         illegal_action_flag = True
-        #         if adjust_gen_p[i] < 0:
-        #             adjust_gen_p[i] = -(settings.max_gen_p[i] * settings.ramp_rate)
-        #         elif adjust_gen_p[i] >= 0:
-        #             adjust_gen_p[i] = settings.max_gen_p[i] * settings.ramp_rate
-        #
-        # # TODO: nextstep_gen_p is more reasonable?
-        # idx = 0
-        # for i in settings.renewable_ids:
-        #     if injection_gen_p[i] >= min(obs.curstep_renewable_gen_p_max[idx], settings.max_gen_p[i]):
-        #         illegal_action_flag = True
-        #         adjust_gen_p[i] = min(obs.curstep_renewable_gen_p_max[idx], settings.max_gen_p[i]) - obs.gen_p[i]
-        #     idx += 1
-
-    action = form_action(adjust_gen_p, adjust_gen_v)
-    # TODO: add self-defined reward to tell Agent the primal actions are illegal, although have been legalized.
-    return action, illegal_action_flag
+    return form_action(adjust_gen_p, adjust_gen_v)
 
 class DDPG_Agent(BaseAgent):
     def __init__(
@@ -155,12 +102,10 @@ class DDPG_Agent(BaseAgent):
             action_dim,
             state_dim,
             gamma=0.99,
-            optimizer="Adam",
-            optimizer_paoameters={},
             tau=0.001,
             initial_eps=1.0,
             end_eps=0.001,
-            eps_decay=5e3,
+            eps_decay=0.999,
         ):
 
         BaseAgent.__init__(self, settings.num_gen)
@@ -184,25 +129,15 @@ class DDPG_Agent(BaseAgent):
         self.critic_target = copy.deepcopy(self.critic)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau)
+        self.cnt = 0
 
-    def act(self, state, obs, reward=0.0, done=False, target_flag=False
-            # , training=True    # ????training flag????training??self.actor_target(state);???test??self.actor_target(obs)
-            ):
+    def act(self, state, obs, done=False):
         state = state.to(self.device)
-        # if not training:
-        adjust_gen_p = self.actor_target(state).detach().cpu().numpy()
-        adjust_gen_v = np.zeros_like(adjust_gen_p)
-        return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)
-        # else:
-        #     if target_flag:
-        #         adjust_gen_p = self.actor_target(state)
-        #     else:
-        #         adjust_gen_p = self.actor(state)
-            # adjust_gen_v = np.zeros_like(adjust_gen_p)
-            # adjust_gen_v = torch.zeros_like(adjust_gen_p)
-            # return legalize_action((adjust_gen_p, adjust_gen_v), self.settings, obs)   #???????
-            # return form_action(adjust_gen_p, adjust_gen_v)
-
+        action_high, action_low = get_action_space(obs, self.settings)
+        action_high, action_low = action_high.to(self.device), action_low.to(self.device)
+        adjust_gen = self.actor_target(state, action_high, action_low).detach().cpu().numpy()
+        adjust_gen_p, adjust_gen_v = adjust_gen[:len(adjust_gen)//2], adjust_gen[len(adjust_gen)//2:]
+        return form_action(adjust_gen_p, adjust_gen_v)
 
     def copy_target_update(self):
         # Softly update the target networks
@@ -213,44 +148,45 @@ class DDPG_Agent(BaseAgent):
             eval('self.critic_target.' + x + '.data.mul_((1-self.tau))')
             eval('self.critic_target.' + x + '.data.add_(self.tau*self.critic.' + x + '.data)')
 
-    def train(self, replay_buffer, obs):
+    def train(self, replay_buffer, obs, next_obs):
         # Sample replay buffer
         state, action, next_state, reward, done = replay_buffer.sample()
         state = state.to(self.device)
+
         # Make action and evaluate its action values
         # TODO: is legalize_action necessary in train ?
-        # action_out, illegal_action_flag = self.act(state, obs)
-        action_out = self.actor(state)
-        # Q = self.critic(state, torch.from_numpy(action_out['adjust_gen_p']).to(self.device))
+        action_high, action_low = get_action_space(obs, self.settings)
+        action_high, action_low = action_high.to(self.device), action_low.to(self.device)
+        action_out = self.actor(state, action_high, action_low)
+
         Q = self.critic(state, action_out)
         actor_loss = -torch.mean(Q)
 
         # Optimize the actor network
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        print(f'actor gradient max={max([p.max() for p in self.actor.get_gradients()])}')
         self.actor_optimizer.step()
 
         # Compute the target Q value using the information of next state
-        #action_target = self.actor_target(next_state)
         next_state = next_state.to(self.device)
-        # action_target, illegal_action_flag = self.act(state, obs, target_flag=True)
-        action_target = self.actor_target(state)
-        # Q_tmp = self.critic_target(next_state, torch.from_numpy(action_target['adjust_gen_p']).to(self.device))
+        action_high, action_low = get_action_space(next_obs, self.settings)
+        action_high, action_low = action_high.to(self.device), action_low.to(self.device)
+        action_target = self.actor_target(next_state, action_high, action_low)
         Q_tmp = self.critic_target(next_state, action_target)
         Q_target = reward + self.gamma * Q_tmp
 
         # Compute the current Q value and the loss
-        state = state.to(self.device)
         Q_current = self.critic(state, action)
         critic_loss = nn.MSELoss()(Q_target, Q_current)
 
         # Optimize the critic network
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        print(f'critic gradient max={max([p.max() for p in self.critic.get_gradients()])}')
+        if self.cnt % 50 == 0:
+            print(f'actor gradient max={max([p.max() for p in self.actor.get_gradients()])}')
+            print(f'critic gradient max={max([p.max() for p in self.critic.get_gradients()])}')
         self.critic_optimizer.step()
-
+        self.cnt += 1
         return {
             'Q': Q_current.mean().detach().cpu().numpy(),
             'Q_loss': critic_loss.mean().detach().cpu().numpy(),
@@ -280,14 +216,14 @@ class StandardBuffer(object):
 
         self.state = np.zeros((self.max_size, state_dim))
         self.action = np.zeros((self.max_size, num_actions))
-        # self.action = [0 for _ in range(self.max_size)]
+        # self.action_ori = np.zeros((self.max_size, num_actions))
         self.next_state = np.array(self.state)
         self.reward = np.zeros((self.max_size, 1))
         self.not_done = np.zeros((self.max_size, 1))
 
-    def add(self, state, action, next_state, reward, done, episode_done, episode_start):
+    def add(self, state, action, next_state, reward, done, episode_start):
         self.state[self.ptr] = state
-        self.action[self.ptr] = action['adjust_gen_p']
+        self.action[self.ptr] = np.asarray([action['adjust_gen_p'], action['adjust_gen_v']]).flatten()
         self.next_state[self.ptr] = next_state
         self.reward[self.ptr] = reward
         self.not_done[self.ptr] = 1. - done
@@ -301,6 +237,7 @@ class StandardBuffer(object):
         return (
             torch.FloatTensor(self.state[ind]).to(self.device),
             torch.FloatTensor(self.action[ind]).to(self.device),
+            # torch.FloatTensor(self.action_ori[ind]).to(self.device),
             torch.FloatTensor(self.next_state[ind]).to(self.device),
             torch.FloatTensor(self.reward[ind]).to(self.device),
             torch.FloatTensor(self.not_done[ind]).to(self.device)
