@@ -1,9 +1,10 @@
 import numpy as np
 from sklearn import preprocessing
 import torch
+from utilize.settings import settings
 from utilize.form_action import *
 
-def get_state_from_obs(obs, settings):
+def get_state_from_obs(obs):
     state_form = {'gen_p', 'gen_q', 'gen_v', 'load_p', 'load_q', 'load_v', 'p_or', 'q_or', 'v_or', 'a_or', 'p_ex',
                   'q_ex', 'v_ex', 'a_ex',
                   'rho', 'grid_loss', 'curstep_renewable_gen_p_max'}
@@ -25,14 +26,14 @@ def get_state_from_obs(obs, settings):
     state = np.concatenate(state)
     return state
 
-def get_action_space(obs, settings):
+def get_action_space(obs):
     action_high = np.asarray([obs.action_space['adjust_gen_p'].high, obs.action_space['adjust_gen_v'].high]).flatten()
     action_high = np.where(np.isinf(action_high), np.full_like(action_high, 0), action_high)  # feed 0 to balanced generator threshold
     action_low = np.asarray([obs.action_space['adjust_gen_p'].low, obs.action_space['adjust_gen_v'].low]).flatten()
     action_low = np.where(np.isinf(action_low), np.full_like(action_low, 0), action_low)  # feed 0 to balanced generator threshold
     return action_high, action_low
 
-def legalize_action(action, settings, obs):
+def legalize_action(action, obs):
 
     adjust_gen_p, adjust_gen_v = action
     if len(adjust_gen_p.shape) > 1:

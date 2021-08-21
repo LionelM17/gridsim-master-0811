@@ -34,7 +34,7 @@ def run_task(my_agent):
             print("overflow rho: ", [obs.rho[i] for i in ids])
             print('------ step ', timestep)
             state = get_state_from_obs(obs)
-            action = my_agent.act(torch.from_numpy(state).to('cuda'), obs, done)
+            action = my_agent.act(state.to('cuda'), obs, done)
             obs, reward, done, info = env.step(action)
             episode_reward[episode] += reward
             if done:
@@ -59,7 +59,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
     episode_timesteps = 0
     episode_num = 0
 
-    # eps = policy_agent.initial_eps
+    eps = policy_agent.initial_eps
 
     # interact with the enviroment for max_timesteps
     info_train = None
@@ -70,7 +70,8 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
         if np.random.uniform(0, 1) < eps:
             action= rand_agent.act(obs)
         else:
-            action= policy_agent.act(torch.from_numpy(state), obs)
+            action= policy_agent.act(state, obs)
+            action = add_normal_noise(action, action_high, action_low)
 
         # Gaussian Noise
         # action = policy_agent.act(state, obs)
@@ -79,17 +80,21 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
         # env step
         next_obs, reward, done, info = env.step(action)
         next_state = get_state_from_obs(next_obs)
-        next_action_high, next_action_low = get_action_space(next_obs, settings)
+        next_action_high, next_action_low = get_action_space(next_obs)
+
+        # import ipdb
+        # ipdb.set_trace()
 
         # Train agent after collecting sufficient data
         if t >= parameters["start_timesteps"]:
             info_train = policy_agent.train()  # replay buffer sampled state mismatch obs ?
 
-        if (t % parameters["target_update_interval"] == 0):
+        if t >0 and (t % parameters["target_update_interval"] == 0):
             policy_agent.copy_target_update()
         episode_start = False
 
         episode_reward += reward
+        reward *= 10
         # add to replaybuffer
         replay_buffer.add(state, action, action_high, action_low, next_state, next_action_high, next_action_low, reward, done, episode_start)
         state = copy.copy(next_state)
@@ -97,9 +102,9 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
         action_high, action_low = copy.copy(next_action_high), copy.copy(next_action_low)
 
         if done:
-            if episode_num % 10:
-                print(info)
-                print(
+            # if episode_num % 10:
+            # print(info)
+            print(
                     f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
             if episode_num % 200 == 0:
                 summary_writer.add_scalar('reward', episode_reward, t)
@@ -120,14 +125,16 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
                 eps *= policy_agent.eps_decay
             else:
                 eps = policy_agent.end_eps
-            #print(eps)
+            # print(eps)
 
         if t > 0 and t % parameters["model_save_interval"] == 0:
             policy_agent.save(f'./models/model_{t}')
 
-        if t % parameters["test_interval"] == 0 and t > 0:
-            mean_score = run_task(policy_agent)
-            summary_writer.add_scalar('test_mean_score', mean_score, t)
+        # if t % parameters["test_interval"] == 0 and t > 0:
+        #     torch.model.eval()
+        #     mean_score = run_task(policy_agent)
+        #     summary_writer.add_scalar('test_mean_score', mean_score, t)
+        #     torch.model.train()
     return policy_agent
 
 if __name__ == "__main__":
@@ -141,7 +148,7 @@ if __name__ == "__main__":
         "eval_freq": int(5e2),
         # Learning
         "gamma": 0.99,
-        "batch_size": 16,
+        "batch_size": 32,
         "optimizer": "Adam",
         "optimizer_parameters": {
             "lr": 0.001
@@ -158,7 +165,7 @@ if __name__ == "__main__":
         "max_timestep": 10000000,
         "max_episode": 50000,
         "buffer_size": 1000 * 1000,
-        "target_update_interval": 200,
+        "target_update_interval": 20,
         "model_save_interval": 10000,
         "test_interval": 1000
     }
@@ -177,4 +184,4 @@ if __name__ == "__main__":
 
     replay_buffer = StandardBuffer(state_dim, action_dim, parameters["batch_size"], parameters["buffer_size"], device)
     trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
-    run_task(trained_policy_agent)
+    # run_task(trained_policy_agent)

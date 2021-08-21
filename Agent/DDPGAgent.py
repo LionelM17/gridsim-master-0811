@@ -37,28 +37,32 @@ class DDPG_Agent(BaseAgent):
         self.end_eps = end_eps
         self.eps_decay = eps_decay
 
-        self.actor = ActorNet(state_dim, action_dim, self.settings).to(self.device)
+        self.actor = ActorNet(state_dim, action_dim).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
         self.critic = CriticNet(state_dim, action_dim).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=1e-4)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005)
         self.cnt = 0
 
     def act(self, state, obs, done=False):
         state = torch.from_numpy(state).to(self.device)
-        action_high, action_low = get_action_space(obs, self.settings)
+        action_high, action_low = get_action_space(obs)
         action_high, action_low = torch.from_numpy(action_high).to(self.device), torch.from_numpy(action_low).to(self.device)
-        adjust_gen = self.actor_target(state, action_high, action_low).detach().cpu().numpy()
+        adjust_gen = self.actor(state, action_high, action_low).detach().cpu().numpy()
         adjust_gen_p, adjust_gen_v = adjust_gen[:len(adjust_gen)//2], adjust_gen[len(adjust_gen)//2:]
         return form_action(adjust_gen_p, adjust_gen_v)
 
     def copy_target_update(self):
         # Softly update the target networks
         for x in self.actor_target.state_dict().keys():
+            if x == 'bm.num_batches_tracked':
+                continue
             eval('self.actor_target.' + x + '.data.mul_((1-self.tau))')
             eval('self.actor_target.' + x + '.data.add_(self.tau*self.actor.' + x + '.data)')
         for x in self.critic_target.state_dict().keys():
+            if x == 'bm.num_batches_tracked':
+                continue
             eval('self.critic_target.' + x + '.data.mul_((1-self.tau))')
             eval('self.critic_target.' + x + '.data.add_(self.tau*self.critic.' + x + '.data)')
 
@@ -76,6 +80,8 @@ class DDPG_Agent(BaseAgent):
         # Optimize the actor network
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        # import ipdb
+        # ipdb.set_trace()
         self.actor_optimizer.step()
 
         # Compute the target Q value using the information of next state
