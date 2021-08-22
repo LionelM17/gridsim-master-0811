@@ -33,8 +33,8 @@ def run_task(my_agent):
             ids = [i for i, x in enumerate(obs.rho) if x > 1.0]
             print("overflow rho: ", [obs.rho[i] for i in ids])
             print('------ step ', timestep)
-            state = get_state_from_obs(obs)
-            action = my_agent.act(torch.from_numpy(state).to('cuda'), obs, done)
+            state = get_state_from_obs(obs, settings)
+            action = my_agent.act(state, obs)
             obs, reward, done, info = env.step(action)
             episode_reward[episode] += reward
             if done:
@@ -61,6 +61,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
     # interact with the enviroment for max_timesteps
     info_train = None
+    print('no noise')
     for t in range(parameters['max_timestep']):
         episode_timesteps += 1
 
@@ -72,7 +73,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
         # Gaussian Noise
         action = policy_agent.act(state, obs)
-        action = add_normal_noise(action, action_high, action_low)   # add normal noise on action to improve exploration
+        # action = add_normal_noise(action, action_high, action_low)   # add normal noise on action to improve exploration
 
         # env step
         next_obs, reward, done, info = env.step(action)
@@ -124,7 +125,7 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
         if t > 0 and t % parameters["model_save_interval"] == 0:
             policy_agent.save(f'./models/model_{t}')
 
-        if t % parameters["test_interval"] == 0 and t > 0:
+        if t % parameters["test_interval"] == 0:
             mean_score = run_task(policy_agent)
             summary_writer.add_scalar('test_mean_score', mean_score, t)
     return policy_agent

@@ -3,6 +3,7 @@ from DDPG import ActorNet, CriticNet
 from utils import get_action_space
 from utilize.form_action import *
 import torch.nn as nn
+import numpy as np
 
 import torch
 import copy
@@ -42,7 +43,7 @@ class DDPG_Agent(BaseAgent):
         self.critic = CriticNet(state_dim, action_dim).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau/10)
         self.cnt = 0
 
     def act(self, state, obs, done=False):
@@ -55,12 +56,16 @@ class DDPG_Agent(BaseAgent):
 
     def copy_target_update(self):
         # Softly update the target networks
+        actor_dict = self.actor_target.state_dict()
+        critic_dict = self.critic_target.state_dict()
         for x in self.actor_target.state_dict().keys():
-            eval('self.actor_target.' + x + '.data.mul_((1-self.tau))')
-            eval('self.actor_target.' + x + '.data.add_(self.tau*self.actor.' + x + '.data)')
+            actor_dict[x] *= 1 - self.tau
+            actor_dict[x] += self.tau * self.actor.state_dict()[x]
         for x in self.critic_target.state_dict().keys():
-            eval('self.critic_target.' + x + '.data.mul_((1-self.tau))')
-            eval('self.critic_target.' + x + '.data.add_(self.tau*self.critic.' + x + '.data)')
+            critic_dict[x] *= 1 - self.tau
+            critic_dict[x] += self.tau * self.critic.state_dict()[x]
+        self.actor_target.load_state_dict(actor_dict)
+        self.critic_target.load_state_dict(critic_dict)
 
     def train(self):
         # Sample replay buffer
@@ -92,8 +97,8 @@ class DDPG_Agent(BaseAgent):
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         if self.cnt % 50 == 0:
-            print(f'actor gradient max={max([p.max() for p in self.actor.get_gradients()])}')
-            print(f'critic gradient max={max([p.max() for p in self.critic.get_gradients()])}')
+            print(f'actor gradient max={max([np.abs(p).max() for p in self.actor.get_gradients()])}')
+            print(f'critic gradient max={max([np.abs(p).max() for p in self.critic.get_gradients()])}')
             print(f'actor loss={actor_loss:.3f}, critic loss={critic_loss:.3f}')
         self.critic_optimizer.step()
         self.cnt += 1
