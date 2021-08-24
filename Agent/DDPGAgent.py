@@ -16,11 +16,7 @@ class DDPG_Agent(BaseAgent):
             device,
             action_dim,
             state_dim,
-            gamma=0.99,
-            tau=0.001,
-            initial_eps=1.0,
-            end_eps=0.001,
-            eps_decay=0.999,
+            parameters
         ):
 
         BaseAgent.__init__(self, settings.num_gen)
@@ -32,45 +28,62 @@ class DDPG_Agent(BaseAgent):
         self.state_dim = state_dim
         self.state_shape = (-1, state_dim)
 
-        self.gamma = gamma
-        self.tau = tau
-        self.initial_eps = initial_eps
-        self.end_eps = end_eps
-        self.eps_decay = eps_decay
+        self.parameters = parameters
+        self.gamma = parameters['gamma']
+        self.tau = parameters['tau']
+        self.initial_eps = parameters['initial_eps']
+        self.end_eps = parameters['end_eps']
+        self.eps_decay = parameters['eps_decay']
 
         self.actor = ActorNet(state_dim, action_dim, self.settings).to(self.device)
         self.actor_target = copy.deepcopy(self.actor)
         self.critic = CriticNet(state_dim, action_dim).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau/10)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.tau, weight_decay=5e-3)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.tau, weight_decay=5e-3)
         self.cnt = 0
 
     def act(self, state, obs, done=False):
-        state = torch.from_numpy(state).to(self.device)
-        action_high, action_low = get_action_space(obs, self.settings)
-        action_high, action_low = torch.from_numpy(action_high).to(self.device), torch.from_numpy(action_low).to(self.device)
-        adjust_gen = self.actor_target(state, action_high, action_low).detach().cpu().numpy()
-        adjust_gen_p, adjust_gen_v = adjust_gen[:len(adjust_gen)//2], adjust_gen[len(adjust_gen)//2:]
+        self.actor.eval()
+        state = torch.from_numpy(state).unsqueeze(0).to(self.device)
+        # import ipdb
+        # ipdb.set_trace()
+        action_high, action_low = get_action_space(obs, self.parameters)
+        action_high, action_low = torch.from_numpy(action_high).unsqueeze(0).to(self.device), torch.from_numpy(action_low).unsqueeze(0).to(self.device)
+        # import ipdb
+        # ipdb.set_trace()
+        adjust_gen = self.actor(state, action_high, action_low).squeeze().detach().cpu().numpy()
+        if self.parameters['only_power']:
+            adjust_gen_p = adjust_gen
+            adjust_gen_v = np.zeros_like(adjust_gen_p)
+        else:
+            adjust_gen_p, adjust_gen_v = adjust_gen[:len(adjust_gen)//2], adjust_gen[len(adjust_gen)//2:]
+        self.actor.train()
         return form_action(adjust_gen_p, adjust_gen_v)
 
     def copy_target_update(self):
         # Softly update the target networks
-        actor_dict = self.actor_target.state_dict()
-        critic_dict = self.critic_target.state_dict()
-        for x in self.actor_target.state_dict().keys():
-            actor_dict[x] *= 1 - self.tau
-            actor_dict[x] += self.tau * self.actor.state_dict()[x]
-        for x in self.critic_target.state_dict().keys():
-            critic_dict[x] *= 1 - self.tau
-            critic_dict[x] += self.tau * self.critic.state_dict()[x]
-        self.actor_target.load_state_dict(actor_dict)
-        self.critic_target.load_state_dict(critic_dict)
+        # actor_dict = self.actor_target.state_dict()
+        # critic_dict = self.critic_target.state_dict()
+        # for x in self.actor_target.state_dict().keys():
+        #     import ipdb
+        #     ipdb.set_trace()
+        #     actor_dict[x] *= 1 - self.tau
+        #     actor_dict[x] += self.tau * self.actor.state_dict()[x]
+        # for x in self.critic_target.state_dict().keys():
+        #     critic_dict[x] *= 1 - self.tau
+        #     critic_dict[x] += self.tau * self.critic.state_dict()[x]
+        # self.actor_target.load_state_dict(actor_dict)
+        # self.critic_target.load_state_dict(critic_dict)
+
+        for target_param, param in zip(self.actor_target.parameters(), self.actor.parameters()):
+            target_param.data.copy_(target_param.data * (1.0 - self.tau) + param.data * self.tau)
+        for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
+            target_param.data.copy_(target_param.data * (1.0 - self.tau) + param.data * self.tau)
 
     def train(self):
         # Sample replay buffer
         state, action, action_high, action_low, next_state, next_action_high, next_action_low, reward, done = self.replay_buffer.sample()
-        # state = state.to(self.device)
 
         # Make action and evaluate its action values
         action_out = self.actor(state, action_high, action_low)
@@ -81,12 +94,13 @@ class DDPG_Agent(BaseAgent):
         # Optimize the actor network
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=2)
         self.actor_optimizer.step()
 
         # Compute the target Q value using the information of next state
         # next_state = next_state.to(self.device)
-        action_target = self.actor_target(next_state, next_action_high, next_action_low)
-        Q_tmp = self.critic_target(next_state, action_target)
+        next_action = self.actor_target(next_state, next_action_high, next_action_low)
+        Q_tmp = self.critic_target(next_state, next_action)
         Q_target = reward + self.gamma * (1 - done) * Q_tmp
 
         # Compute the current Q value and the loss
@@ -96,6 +110,7 @@ class DDPG_Agent(BaseAgent):
         # Optimize the critic network
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=2)
         if self.cnt % 50 == 0:
             print(f'actor gradient max={max([np.abs(p).max() for p in self.actor.get_gradients()])}')
             print(f'critic gradient max={max([np.abs(p).max() for p in self.critic.get_gradients()])}')
