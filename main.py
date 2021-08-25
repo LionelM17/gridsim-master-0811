@@ -9,7 +9,7 @@ from Environment.base_env import Environment
 from utilize.settings import settings
 from ReplayBuffer import StandardBuffer
 from Agent.DDPGAgent import DDPG_Agent
-from utils import get_action_space, get_state_from_obs, legalize_action, add_normal_noise
+from utils import get_action_space, get_state_from_obs, legalize_action, add_normal_noise, check_extreme_action
 import json
 # import ray
 import warnings
@@ -45,40 +45,41 @@ def run_task(my_agent):
         return sum(episode_reward) / len(episode_reward)
 
 def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
-    policy_agent = DDPG_Agent(settings, replay_buffer, device, action_dim, state_dim, gamma=parameters['gamma'],
-                                   tau=parameters['tau'], initial_eps=parameters['initial_eps'],
-                                   end_eps=parameters['end_eps'], eps_decay=parameters['eps_decay'])
+    policy_agent = DDPG_Agent(settings, replay_buffer, device, action_dim, state_dim, parameters)
     rand_agent = RandomAgent(settings.num_gen)
     obs, done = env.reset(), False
     state = get_state_from_obs(obs, settings)
-    action_high, action_low = get_action_space(obs, settings)
+    action_high, action_low = get_action_space(obs, parameters)
     episode_start = True
     episode_reward = 0
     episode_timesteps = 0
     episode_num = 0
 
-    # eps = policy_agent.initial_eps
+    eps = policy_agent.initial_eps
 
     # interact with the enviroment for max_timesteps
     info_train = None
-    print('no noise')
+    # print('no noise')
     for t in range(parameters['max_timestep']):
         episode_timesteps += 1
 
-        # greedy eps
-        # if np.random.uniform(0, 1) < eps:
-        #     action = rand_agent.act(obs)
-        # else:
-        #     action = policy_agent.act(torch.from_numpy(state), obs)
-
-        # Gaussian Noise
-        action = policy_agent.act(state, obs)
-        # action = add_normal_noise(action, action_high, action_low)   # add normal noise on action to improve exploration
+        if parameters['random_explore'] == 'EpsGreedy':
+            # greedy eps
+            if np.random.uniform(0, 1) < eps:
+                action = rand_agent.act(obs)
+            else:
+                action = policy_agent.act(state, obs)
+                check_extreme_action(action, action_high, action_low, parameters['only_power'])
+        elif parameters['random_explore'] == 'Gaussian':
+            # Gaussian Noise
+            action = policy_agent.act(state, obs)
+            check_extreme_action(action, action_high, action_low, parameters['only_power'])
+            action = add_normal_noise(action, action_high, action_low, parameters['only_power'])   # add normal noise on action to improve exploration
 
         # env step
         next_obs, reward, done, info = env.step(action)
         next_state = get_state_from_obs(next_obs, settings)
-        next_action_high, next_action_low = get_action_space(next_obs, settings)
+        next_action_high, next_action_low = get_action_space(next_obs, parameters)
 
         # Train agent after collecting sufficient data
         if t >= parameters["start_timesteps"]:
@@ -111,15 +112,15 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
             # Reset environment
             obs, done = env.reset(), False
             state = get_state_from_obs(obs, settings)
-            action_high, action_low = get_action_space(obs, settings)
+            action_high, action_low = get_action_space(obs, parameters)
             episode_start = True
             episode_reward = 0
             episode_timesteps = 0
             episode_num += 1
-            # if eps > policy_agent.end_eps:
-            #     eps *= policy_agent.eps_decay
-            # else:
-            #     eps = policy_agent.end_eps
+            if eps > policy_agent.end_eps:
+                eps *= policy_agent.eps_decay
+            else:
+                eps = policy_agent.end_eps
             # print(f'epsilon={eps:.3f}')
 
         if t > 0 and t % parameters["model_save_interval"] == 0:
@@ -131,7 +132,6 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
     return policy_agent
 
 if __name__ == "__main__":
-    summary_writer = SummaryWriter()
     parameters = {
         "start_timesteps": 100,
         "initial_eps": 0.9,
@@ -141,12 +141,12 @@ if __name__ == "__main__":
         "eval_freq": int(5e2),
         # Learning
         "gamma": 0.99,
-        "batch_size": 16,
+        "batch_size": 32,
         "optimizer": "Adam",
         "optimizer_parameters": {
             "lr": 0.001
         },
-        "train_freq": 2,
+        "train_freq": 150,
         "target_update_fre": 16,
         "tau": 0.001,
         "control_circle": 3,
@@ -159,23 +159,36 @@ if __name__ == "__main__":
         "max_timestep": 10000000,
         "max_episode": 50000,
         "buffer_size": 1000 * 1000,
-        "target_update_interval": 200,
+        "target_update_interval": 300,
         "model_save_interval": 10000,
-        "test_interval": 1000
+        "test_interval": 1000,
+        "only_power": True,
+        "padding_state": False,
+        "random_explore": 'EpsGreedy'  # Gaussian or EpsGreedy
     }
+
+    # seed
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
+    torch.backends.cudnn.deterministic = True
+
+    summary_writer = SummaryWriter()
     # get state dim and action dim
     env = Environment(settings, "EPRIReward")
     obs = env.reset()
     action_dim_p = obs.action_space['adjust_gen_p'].shape[0]
     action_dim_v = obs.action_space['adjust_gen_v'].shape[0]
     assert action_dim_v == action_dim_p
-    action_dim = action_dim_p + action_dim_v
+    if parameters['only_power']:
+        action_dim = action_dim_p
+    else:
+        action_dim = action_dim_p + action_dim_v
 
     state = get_state_from_obs(obs, settings)
     state_dim = len(state)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    replay_buffer = StandardBuffer(state_dim, action_dim, parameters["batch_size"], parameters["buffer_size"], device)
+    replay_buffer = StandardBuffer(state_dim, action_dim, parameters, device)
     trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
     run_task(trained_policy_agent)

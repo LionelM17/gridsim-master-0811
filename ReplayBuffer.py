@@ -2,10 +2,11 @@ import numpy as np
 import torch
 
 class StandardBuffer(object):
-    def __init__(self, state_dim, num_actions, batch_size, buffer_size, device):
-        self.batch_size = batch_size
-        self.max_size = int(buffer_size)
-        self.buffer_size = int(buffer_size)
+    def __init__(self, state_dim, num_actions, parameters, device):
+        self.parameters = parameters
+        self.batch_size = parameters['batch_size']
+        self.max_size = int(parameters['buffer_size'])
+        self.buffer_size = int(parameters['buffer_size'])
         self.device = device
 
         self.ptr = 0
@@ -23,7 +24,10 @@ class StandardBuffer(object):
 
     def add(self, state, action, action_high, action_low, next_state, next_action_high, next_action_low, reward, done, episode_start):
         self.state[self.ptr] = state
-        self.action[self.ptr] = np.asarray([action['adjust_gen_p'], action['adjust_gen_v']]).flatten()
+        if self.parameters['only_power']:
+            self.action[self.ptr] = action['adjust_gen_p']
+        else:
+            self.action[self.ptr] = np.asarray([action['adjust_gen_p'], action['adjust_gen_v']]).flatten()
         self.action_high[self.ptr] = action_high
         self.action_low[self.ptr] = action_low
         self.next_state[self.ptr] = next_state
