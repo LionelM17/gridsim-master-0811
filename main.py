@@ -9,6 +9,7 @@ from Environment.base_env import Environment
 from utilize.settings import settings
 from ReplayBuffer import StandardBuffer
 from Agent.DDPGAgent import DDPG_Agent
+from Agent.PPOAgent import PPO
 from utils import get_action_space, get_state_from_obs, legalize_action, add_normal_noise, check_extreme_action
 import json
 # import ray
@@ -131,6 +132,62 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
             summary_writer.add_scalar('test_mean_score', mean_score, t)
     return policy_agent
 
+def PPO_train(env, action_dim, state_dim, device, parameters, summary_writer):
+    policy_agent = PPO(state_dim, action_dim, parameters, device, parameters['lr_actor'], parameters['lr_critic'],
+                        parameters['gamma'], parameters['K_epochs'], parameters['eps_clip'], parameters['continuous_action_space'], parameters['action_std'])
+
+    episode_reward = 0
+    episode_num = 0
+
+    for t in range(parameters['max_timestep']):
+        episode_num += 1
+        obs, done = env.reset(), False
+        state = get_state_from_obs(obs, settings)
+        episode_reward = 0
+        episode_timesteps = 0
+
+        for ep in range(parameters['max_episode']):
+            episode_timesteps += 1
+            action = policy_agent.select_action(state, obs)
+            next_obs, reward, done, info = env.step(action)
+            next_state = get_state_from_obs(next_obs, settings)
+
+            # saving reward and is_terminals
+            policy_agent.buffer.rewards.append(reward)
+            policy_agent.buffer.is_terminals.append(done)
+            episode_reward += reward
+
+            # update obs and state
+            state = copy.copy(next_state)
+            obs = copy.copy(next_obs)
+
+            # update PPO agent
+            if t % parameters['train_freq'] == 0:
+                policy_agent.update()
+
+            # if continuous action space; then decay action std of ouput action distribution
+            if parameters['continuous_action_space'] and t % parameters['action_std_decay_freq'] == 0:
+                policy_agent.decay_action_std(parameters['action_std_decay_rate'], parameters['min_action_std'])
+
+            # save model weights
+            if t > 0 and t % parameters["model_save_interval"] == 0:
+                policy_agent.save(f'./models/model_{t}')
+
+            if done:
+                if episode_num % 10 == 0:
+                    print(info)
+                    print(
+                        f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
+                if episode_num % 200 == 0:
+                    summary_writer.add_scalar('reward', episode_reward, t)
+                    summary_writer.add_scalar('episode_timesteps', episode_timesteps, t)
+                    if info_train is not None:
+                        for k, v in info_train.items():
+                            summary_writer.add_scalar(k, v, t)
+                break
+
+    return policy_agent
+
 if __name__ == "__main__":
     parameters = {
         "start_timesteps": 100,
@@ -146,7 +203,7 @@ if __name__ == "__main__":
         "optimizer_parameters": {
             "lr": 0.001
         },
-        "train_freq": 150,
+        "train_freq": 4000,
         "target_update_fre": 16,
         "tau": 0.001,
         "control_circle": 3,
@@ -157,14 +214,24 @@ if __name__ == "__main__":
         "lstm_batch_size": 1,
         "output_size": 1,
         "max_timestep": 10000000,
-        "max_episode": 50000,
+        "max_episode": 1000,
         "buffer_size": 1000 * 1000,
         "target_update_interval": 300,
         "model_save_interval": 10000,
         "test_interval": 1000,
         "only_power": True,
         "padding_state": False,
-        "random_explore": 'EpsGreedy'  # Gaussian or EpsGreedy
+        "random_explore": 'EpsGreedy',  # Gaussian or EpsGreedy
+        # PPO parameters
+        'lr_actor': 0.0003,
+        'lr_critic': 0.001,
+        'K_epochs': 80,
+        'eps_clip': 0.2,
+        'action_std': 0.6,
+        'action_std_decay_rate': 0.05,
+        'min_action_std': 0.1,
+        'action_std_decay_freq': int(2.5e5),
+        'continuous_action_space': True
     }
 
     # seed
@@ -189,6 +256,8 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    replay_buffer = StandardBuffer(state_dim, action_dim, parameters, device)
-    trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
-    run_task(trained_policy_agent)
+    # replay_buffer = StandardBuffer(state_dim, action_dim, parameters, device)
+    # trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
+    # run_task(trained_policy_agent)
+
+    trained_policy_agent = PPO_train(env, action_dim, state_dim, device, parameters, summary_writer)
