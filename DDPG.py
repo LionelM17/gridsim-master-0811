@@ -53,6 +53,8 @@ class ActorNet(nn.Module):
         m = self.fc(state)
         m = (m + torch.ones_like(m).to('cuda')) / (2*torch.ones_like(m).to('cuda'))\
             * (action_high - action_low) + action_low  # for Tanh or Sigmoid
+        m = (m - (action_high / 2 + action_low / 2)) * 0.8 + (
+                    action_high / 2 + action_low / 2)  # compressed action space
         # m = m * (action_high - action_low) + action_low  # for Softmax
         return m
 
@@ -62,6 +64,9 @@ class ActorNet(nn.Module):
             grad = None if p.grad is None else p.grad.data.cpu().numpy()
             grads.append(grad)
         return grads
+
+    def get_weights(self):
+        return {k: v.cpu() for k, v in self.state_dict().items()}
 
 class CriticNet(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -100,4 +105,7 @@ class CriticNet(nn.Module):
             grad = None if p.grad is None else p.grad.data.cpu().numpy()
             grads.append(grad)
         return grads
+
+    def get_weights(self):
+        return {k: v.cpu() for k, v in self.state_dict().items()}
 
