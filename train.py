@@ -6,8 +6,10 @@ from utilize.settings import settings
 import numpy as np
 import copy
 from test import run_task
+from ReplayBuffer import LinearSchedule
 
 def interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer):
+    score_old = 0.0
     policy_agent = DDPG_Agent(settings, replay_buffer, device, action_dim, state_dim, parameters)
     rand_agent = RandomAgent(settings.num_gen)
     obs, done = env.reset(), False
@@ -20,6 +22,8 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
     eps = policy_agent.initial_eps
 
+    std_noise_schedule = LinearSchedule(parameters['max_timestep'], final_p=0.0, initial_p=0.3)
+
     # interact with the enviroment for max_timesteps
     info_train = None
     # print('no noise')
@@ -29,8 +33,8 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
         if parameters['random_explore'] == 'EpsGreedy':
             # greedy eps
             if np.random.uniform(0, 1) < eps:
-                # action = rand_agent.act(obs)
-                action = policy_agent.act(state, obs)
+                action = rand_agent.act(obs)
+                # action = policy_agent.act(state, obs)
             else:
                 action = policy_agent.act(state, obs)
                 check_extreme_action(action, action_high, action_low, settings, parameters['only_power'], parameters['only_thermal'])
@@ -38,7 +42,12 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
             # Gaussian Noise
             action = policy_agent.act(state, obs)
             check_extreme_action(action, action_high, action_low, settings, parameters['only_power'], parameters['only_thermal'])
-            action = add_normal_noise(action, action_high, action_low, parameters['only_power'])   # add normal noise on action to improve exploration
+            noise_std = std_noise_schedule.value(t)
+            action = add_normal_noise(noise_std, action, action_high, action_low, settings, parameters['only_power'], parameters['only_thermal'])   # add normal noise on action to improve exploration
+        elif parameters['random_explore'] == 'none':
+            action = policy_agent.act(state, obs)
+            check_extreme_action(action, action_high, action_low, settings, parameters['only_power'],
+                                 parameters['only_thermal'])
 
         # env step
         next_obs, reward, done, info = env.step(action)
@@ -68,13 +77,16 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
 
         if done:
             print(info)
-            if episode_num % 10:
-                print(
-                    f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
-            if episode_num % 200 == 0:
-                summary_writer.add_scalar('reward', episode_reward, t)
-                summary_writer.add_scalar('average_reward', episode_reward / episode_timesteps, t)
-                summary_writer.add_scalar('episode_timesteps', episode_timesteps, t)
+            # if episode_num % 10:
+            print(f"Total T: {t + 1} Episode Num: {episode_num + 1} Episode T: {episode_timesteps} Reward: {episode_reward:.3f}")
+            if episode_num % 20 == 0:
+                summary_writer.add_scalar('episode/cumulative reward', episode_reward, t)
+                summary_writer.add_scalar('episode/average_reward', episode_reward / episode_timesteps, t)
+                summary_writer.add_scalar('episode/total_steps', episode_timesteps, t)
+                if parameters['random_explore'] == 'EpsGreedy':
+                    summary_writer.add_scalar('statistics/epsilon', eps, t)
+                elif parameters['random_explore'] == 'Gaussian':
+                    summary_writer.add_scalar('statistics/std', noise_std, t)
                 if info_train is not None:
                     for k, v in info_train.items():
                         summary_writer.add_scalar(k, v, t)
@@ -93,12 +105,16 @@ def interact_with_environment(env, replay_buffer, action_dim, state_dim, device,
                 eps = policy_agent.end_eps
             print(f'epsilon={eps:.3f}')
 
-        if t > 0 and t % parameters["model_save_interval"] == 0:
-            policy_agent.save(f'./models/model_{t}')
+        # if t > 0 and t % parameters["model_save_interval"] == 0:
+        #     policy_agent.save(f'./models/model_{t}')
 
         if t % parameters["test_interval"] == 0:
             mean_score = run_task(policy_agent)
-            summary_writer.add_scalar('test_mean_score', mean_score, t)
+            print(f'-------------test_mean_score = {mean_score} -----------------')
+            if mean_score > score_old:
+                policy_agent.save(f'./models_best/model_2_')
+                score_old = mean_score
+            summary_writer.add_scalar('test/episodic_mean_score', mean_score, t)
     return policy_agent
 
 

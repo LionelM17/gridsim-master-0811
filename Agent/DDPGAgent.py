@@ -132,8 +132,8 @@ class DDPG_Agent(BaseAgent):
             self.cnt += 1
 
         return {
-            'Q': Q.mean().detach().cpu().numpy(),
-            'Q_loss': critic_loss.mean().detach().cpu().numpy(),
+            'training/Q': Q.mean().detach().cpu().numpy(),
+            'training/critic_loss': critic_loss.mean().detach().cpu().numpy(),
         }
 
     def save(self, filename):

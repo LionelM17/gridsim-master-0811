@@ -25,7 +25,7 @@ if __name__ == "__main__":
             "lr": 0.001,
             "weight_decay": 5e-3
         },
-        "train_freq": 600,  # PPO paper 4000
+        "train_freq": 1000,  # PPO paper 4000
         "tau": 0.001,
         "control_circle": 3,
         "seq_len": 3,
@@ -34,18 +34,18 @@ if __name__ == "__main__":
         "max_timestep": 10000000,
         "max_episode": 1000,
         "buffer_size": 1000 * 1000,
-        "target_update_interval": 4000 * 2,
+        "target_update_interval": 100,
         "model_save_interval": 10000,
-        "test_interval": 1000,
+        "test_interval": 5000,
         "only_power": True,
         "only_thermal": True,
         # "action_type": 'only_thermal',  # only_power, only_thermal
         "padding_state": False,
-        "random_explore": 'EpsGreedy',  # Gaussian or EpsGreedy
+        "random_explore": 'Gaussian',  # Gaussian or EpsGreedy or none
         # PPO parameters
         'lr_actor': 0.0003,
         'lr_critic': 0.001,
-        'K_epochs': 20,
+        'K_epochs': 10,
         'eps_clip': 0.2,
         'action_std': 0.6,
         'action_std_decay_rate': 0.05,
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     # import ipdb
     # ipdb.set_trace()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(device)
+    print('device:', device)
     replay_buffer = StandardBuffer(state_dim, action_dim, parameters, device, settings)
     trained_policy_agent = interact_with_environment(env, replay_buffer, action_dim, state_dim, device, parameters, summary_writer)
     run_task(trained_policy_agent)

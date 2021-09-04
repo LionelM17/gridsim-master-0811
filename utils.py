@@ -7,7 +7,7 @@ def get_state_from_obs(obs, settings):
     # state_form = {'gen_p', 'gen_q', 'gen_v', 'load_p', 'load_q', 'load_v', 'p_or', 'q_or', 'v_or', 'a_or', 'p_ex',
     #               'q_ex', 'v_ex', 'a_ex',
     #               'rho', 'grid_loss', 'curstep_renewable_gen_p_max'}
-    state_form = {'gen_p', 'gen_q', 'actual_dispatch', 'load_p', 'load_q'}
+    state_form = {'gen_p', 'gen_q', 'gen_v', 'target_dispatch', 'actual_dispatch', 'load_p', 'load_q', 'load_v', 'rho'}
     state = []
     for name in state_form:
         value = getattr(obs, name)
@@ -67,15 +67,21 @@ def legalize_action(action, settings, obs):
 
     return form_action(adjust_gen_p, adjust_gen_v)
 
-def add_normal_noise(action, action_high, action_low, only_power=False):
+def add_normal_noise(std, action, action_high, action_low, settings, only_power=False, only_thermal=False):
     if only_power:
-        action_dim = len(action['adjust_gen_p'])
-        err_p = np.random.normal(0, 0.1, action_dim)
-        action['adjust_gen_p'] += err_p
-        action['adjust_gen_p'] = action['adjust_gen_p'].clip(action_low, action_high)
+        if only_thermal:
+            action_dim = len(settings.thermal_ids)
+            err_p_thermal = np.random.normal(0, std, action_dim)
+            action['adjust_gen_p'][settings.thermal_ids] += err_p_thermal
+            action['adjust_gen_p'][settings.thermal_ids] = action['adjust_gen_p'][settings.thermal_ids].clip(action_low, action_high)
+        else:
+            action_dim = len(action['adjust_gen_p'])
+            err_p = np.random.normal(0, std, action_dim)
+            action['adjust_gen_p'] += err_p
+            action['adjust_gen_p'] = action['adjust_gen_p'].clip(action_low, action_high)
     else:
         action_dim = len(action['adjust_gen_p']) + len(action['adjust_gen_v'])
-        err_p, err_v = np.random.normal(0, 0.1, action_dim // 2), np.random.normal(0, 0.01, action_dim // 2)
+        err_p, err_v = np.random.normal(0, std, action_dim // 2), np.random.normal(0, std / 10, action_dim // 2)
         # print(f'max_err_p={max(abs(err_p)):.3f}, max_err_v={max(abs(err_v)):.3f}')
         action['adjust_gen_p'] += err_p
         action['adjust_gen_p'] = action['adjust_gen_p'].clip(action_low[:action_dim // 2], action_high[:action_dim // 2])
@@ -125,7 +131,8 @@ def voltage_action(obs, settings, type='1'):  # type = 'period' or '1'
                     else:
                         adjust_gen_v[i] = action_low[i]
     elif type == '1':
-        err = obs.gen_v - (np.asarray(settings.max_gen_v) + np.asarray(settings.min_gen_v)) / 2  # restrict at stable point 1
+        # err = obs.gen_v - (np.asarray(settings.max_gen_v) + np.asarray(settings.min_gen_v)) / 2  # restrict at stable point 1
+        err = np.asarray(obs.gen_v) - 1.05  # restrict at stable point 1.05
         gen_num = len(err)
         action_high, action_low = obs.action_space['adjust_gen_v'].high, obs.action_space['adjust_gen_v'].low
         adjust_gen_v = np.zeros(54)
