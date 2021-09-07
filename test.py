@@ -4,7 +4,6 @@ from utils import get_state_from_obs
 
 def run_task(my_agent):
     max_episode = 10
-    max_timestep = 10000
     episode_reward = [0 for _ in range(max_episode)]
     for episode in range(max_episode):
         print('------ episode ', episode)
@@ -15,10 +14,6 @@ def run_task(my_agent):
         done = False
         timestep = 0
         while not done:
-        # while timestep < max_timestep:
-        # for timestep in range(max_timestep):
-        #     ids = [i for i, x in enumerate(obs.rho) if x > 1.0]
-            # print("overflow rho: ", [obs.rho[i] for i in ids])
             print('------ step ', timestep)
             state = get_state_from_obs(obs, settings)
             action = my_agent.act(state, obs)

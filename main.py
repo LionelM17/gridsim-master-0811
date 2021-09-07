@@ -76,8 +76,8 @@ if __name__ == "__main__":
 
     state = get_state_from_obs(obs, settings)
     state_dim = len(state)
-    # import ipdb
-    # ipdb.set_trace()
+    import ipdb
+    ipdb.set_trace()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print('device:', device)
     replay_buffer = StandardBuffer(state_dim, action_dim, parameters, device, settings)

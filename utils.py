@@ -105,7 +105,7 @@ def check_extreme_action(action, action_high, action_low, settings, only_power=F
         if action[i] == action_high[i] or action[i] == action_low[i]:
             if action_high[i] == action_low[i]:
                 continue
-            print(f'action={action[i]}, high={action_high[i]}, low={action_low[i]}')
+            # print(f'action={action[i]}, high={action_high[i]}, low={action_low[i]}')
             cnt += 1
 
     # print(f'extreme action percentage={cnt/len(action):.3f}')
@@ -132,7 +132,7 @@ def voltage_action(obs, settings, type='1'):  # type = 'period' or '1'
                         adjust_gen_v[i] = action_low[i]
     elif type == '1':
         # err = obs.gen_v - (np.asarray(settings.max_gen_v) + np.asarray(settings.min_gen_v)) / 2  # restrict at stable point 1
-        err = np.asarray(obs.gen_v) - 1.05  # restrict at stable point 1.05
+        err = np.asarray(obs.gen_v) - 1  # restrict at stable point 1.05
         gen_num = len(err)
         action_high, action_low = obs.action_space['adjust_gen_v'].high, obs.action_space['adjust_gen_v'].low
         adjust_gen_v = np.zeros(54)

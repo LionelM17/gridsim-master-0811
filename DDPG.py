@@ -65,8 +65,16 @@ class ActorNet(nn.Module):
             grads.append(grad)
         return grads
 
+    def set_gradients(self, gradients):
+        for g, p in zip(gradients, self.parameters()):
+            if g is not None:
+                p.grad = torch.from_numpy(g).to('cuda')
+
     def get_weights(self):
         return {k: v.cpu() for k, v in self.state_dict().items()}
+
+    def set_weights(self, weights):
+        self.load_state_dict(weights)
 
 class CriticNet(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -106,6 +114,14 @@ class CriticNet(nn.Module):
             grads.append(grad)
         return grads
 
+    def set_gradients(self, gradients):
+        for g, p in zip(gradients, self.parameters()):
+            if g is not None:
+                p.grad = torch.from_numpy(g).to('cuda')
+
     def get_weights(self):
         return {k: v.cpu() for k, v in self.state_dict().items()}
+
+    def set_weights(self, weights):
+        self.load_state_dict(weights)
 

@@ -60,7 +60,7 @@ class DDPG_Agent(BaseAgent):
             adjust_gen_v = voltage_action(obs, self.settings)
         else:
             adjust_gen_p, adjust_gen_v = adjust_gen[:len(adjust_gen)//2], adjust_gen[len(adjust_gen)//2:]
-        self.actor.train()
+        # self.actor.train()
         return form_action(adjust_gen_p, adjust_gen_v)
 
     def copy_target_update(self):
@@ -132,7 +132,7 @@ class DDPG_Agent(BaseAgent):
             self.cnt += 1
 
         return {
-            'training/Q': Q.mean().detach().cpu().numpy(),
+            'training/Q': Q_current.mean().detach().cpu().numpy(),
             'training/critic_loss': critic_loss.mean().detach().cpu().numpy(),
         }
 
